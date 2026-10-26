@@ -18,5 +18,8 @@ typedef struct {
 
 int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
                         tc_mesh_stats *stats);
+int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
+                                tc_block_sampler sampler, const void *context,
+                                tc_mesh *mesh, tc_mesh_stats *stats);
 
 #endif

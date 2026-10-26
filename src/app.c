@@ -1,13 +1,13 @@
 #include "thinkcraft/app.h"
 #include "thinkcraft/arena.h"
-#include "thinkcraft/chunk.h"
-#include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/log.h"
 #include "thinkcraft/mesh.h"
 #include "thinkcraft/platform.h"
 #include "thinkcraft/renderer.h"
 #include "thinkcraft/window.h"
+#include "thinkcraft/world.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -140,24 +140,44 @@ static int resolve_shader_dir(char *buffer, size_t size) {
 
 int tc_app_run(int argc, char **argv) {
     tc_arena arena;
-    tc_chunk *chunk;
+    tc_world world;
     tc_mesh mesh;
-    tc_mesh_stats mesh_stats;
     tc_window window;
     tc_renderer renderer;
+    tc_render_mesh *render_meshes = NULL;
     app_options options;
     char shader_dir[4096];
     char title[256];
-    double start_time;
-    double last_fps_time;
+    double start_time = 0.0;
+    double last_fps_time = 0.0;
     double elapsed;
     double total_elapsed = 0.0;
     double average_fps = 0.0;
+    double total_build_ms = 0.0;
+    double total_scan_ms = 0.0;
     double mesh_reduction = 0.0;
+    size_t total_solid = 0;
+    size_t total_faces = 0;
+    size_t total_quads = 0;
+    size_t total_vertices = 0;
+    size_t total_indices = 0;
+    size_t chunk_count = 0;
+    size_t draw_calls = 0;
     long long total_frames = 0;
+    int world_width;
+    int world_depth;
+    float camera_target[3];
+    float camera_eye[3];
+    float orbit_radius;
+    float angle;
     int frames_since_report = 0;
     int running = 1;
     int parse_result;
+    int world_initialized = 0;
+    int window_created = 0;
+    int renderer_initialized = 0;
+    int mesh_initialized = 0;
+    int exit_code = 1;
 
     parse_result = parse_options(argc, argv, &options);
     if (parse_result < 0) {
@@ -171,45 +191,26 @@ int tc_app_run(int argc, char **argv) {
         return 1;
     }
 
-    chunk = tc_arena_alloc(&arena, sizeof(*chunk));
-    if (chunk == NULL) {
-        tc_log_error("failed to allocate chunk");
-        tc_arena_shutdown(&arena);
-        return 1;
+    if (!tc_world_init(&world, &arena, TC_WORLD_DEFAULT_CHUNKS_X,
+                       TC_WORLD_DEFAULT_CHUNKS_Z)) {
+        tc_log_error("failed to allocate world");
+        goto cleanup;
     }
+    world_initialized = 1;
 
-    tc_chunk_init(chunk, 0, 0, 0);
-    tc_chunk_generate_demo(chunk);
+    tc_world_generate_demo(&world);
+    chunk_count = (size_t)world.chunks_x * (size_t)world.chunks_z;
+    world_width = world.chunks_x * TC_CHUNK_SIZE_X;
+    world_depth = world.chunks_z * TC_CHUNK_SIZE_Z;
 
-    tc_mesh_init(&mesh);
-    if (!tc_chunk_build_mesh(chunk, &mesh, &mesh_stats)) {
-        tc_log_error("greedy meshing failed");
-        tc_mesh_shutdown(&mesh);
-        tc_arena_shutdown(&arena);
-        return 1;
-    }
-
-    if (mesh_stats.quads > 0) {
-        mesh_reduction = (double)mesh_stats.visible_faces
-                       / (double)mesh_stats.quads;
-    }
-
-    tc_log_info("chunk %dx%dx%d: %zu solid blocks",
-                TC_CHUNK_SIZE_X, TC_CHUNK_SIZE_Y, TC_CHUNK_SIZE_Z,
-                mesh_stats.solid_blocks);
-    tc_log_info("greedy mesh: %zu visible faces -> %zu quads (%.2fx), "
-                "%zu vertices, %zu indices",
-                mesh_stats.visible_faces, mesh_stats.quads, mesh_reduction,
-                mesh_stats.vertices, mesh_stats.indices);
-    tc_log_info("mesh build: %.3f ms (visibility scan %.3f ms)",
-                mesh_stats.build_ms, mesh_stats.scan_ms);
+    tc_log_info("world: %d x %d chunks (%d x %d blocks, height %d)",
+                world.chunks_x, world.chunks_z, world_width, world_depth,
+                TC_CHUNK_SIZE_Y);
 
     if (!resolve_shader_dir(shader_dir, sizeof(shader_dir))) {
         tc_log_error("could not locate shaders/basic.vert");
         tc_log_error("run ThinkCraft from the repository or install the shaders directory beside the binary");
-        tc_mesh_shutdown(&mesh);
-        tc_arena_shutdown(&arena);
-        return 1;
+        goto cleanup;
     }
 
     tc_log_info("ThinkCraft starting");
@@ -217,29 +218,89 @@ int tc_app_run(int argc, char **argv) {
 
     if (!tc_window_create(&window, options.width, options.height, options.vsync,
                           "ThinkCraft")) {
-        tc_mesh_shutdown(&mesh);
-        tc_arena_shutdown(&arena);
-        return 1;
+        goto cleanup;
     }
+    window_created = 1;
 
     if (!tc_renderer_init(&renderer, &arena, shader_dir)) {
         tc_log_error("renderer initialization failed");
-        tc_window_destroy(&window);
-        tc_mesh_shutdown(&mesh);
-        tc_arena_shutdown(&arena);
-        return 1;
+        goto cleanup;
+    }
+    renderer_initialized = 1;
+
+    if (chunk_count > SIZE_MAX / sizeof(*render_meshes)) {
+        tc_log_error("too many chunks");
+        goto cleanup;
     }
 
-    if (!tc_renderer_upload_mesh(&renderer, &mesh)) {
-        tc_log_error("failed to upload chunk mesh to OpenGL");
-        tc_renderer_shutdown(&renderer);
-        tc_window_destroy(&window);
-        tc_mesh_shutdown(&mesh);
-        tc_arena_shutdown(&arena);
-        return 1;
+    render_meshes = tc_arena_alloc(&arena,
+                                   chunk_count * sizeof(*render_meshes));
+    if (render_meshes == NULL) {
+        tc_log_error("failed to allocate render meshes");
+        goto cleanup;
+    }
+    memset(render_meshes, 0, chunk_count * sizeof(*render_meshes));
+
+    tc_mesh_init(&mesh);
+    mesh_initialized = 1;
+
+    for (int chunk_z = 0; chunk_z < world.chunks_z; chunk_z++) {
+        for (int chunk_x = 0; chunk_x < world.chunks_x; chunk_x++) {
+            size_t chunk_index = (size_t)chunk_z * (size_t)world.chunks_x
+                               + (size_t)chunk_x;
+            tc_mesh_stats stats;
+
+            if (!tc_world_build_chunk_mesh(&world, chunk_x, chunk_z, &mesh,
+                                           &stats)) {
+                tc_log_error("greedy meshing failed for chunk (%d, %d)",
+                             chunk_x, chunk_z);
+                goto cleanup;
+            }
+
+            total_solid += stats.solid_blocks;
+            total_faces += stats.visible_faces;
+            total_quads += stats.quads;
+            total_vertices += stats.vertices;
+            total_indices += stats.indices;
+            total_build_ms += stats.build_ms;
+            total_scan_ms += stats.scan_ms;
+
+            if (!tc_renderer_upload_mesh(&renderer, &render_meshes[chunk_index],
+                                         &mesh)) {
+                tc_log_error("failed to upload chunk (%d, %d) to OpenGL",
+                             chunk_x, chunk_z);
+                goto cleanup;
+            }
+
+            if (render_meshes[chunk_index].index_count > 0) {
+                draw_calls++;
+            }
+        }
     }
 
     tc_mesh_shutdown(&mesh);
+    mesh_initialized = 0;
+
+    if (total_quads > 0) {
+        mesh_reduction = (double)total_faces / (double)total_quads;
+    }
+
+    tc_log_info("world mesh: %zu solid blocks, %zu visible faces -> "
+                "%zu quads (%.2fx), %zu vertices, %zu indices",
+                total_solid, total_faces, total_quads, mesh_reduction,
+                total_vertices, total_indices);
+    tc_log_info("mesh build: %.2f ms total, %.2f ms average per chunk "
+                "(visibility scan %.2f ms)",
+                total_build_ms, total_build_ms / (double)chunk_count,
+                total_scan_ms);
+    tc_log_info("%zu chunks, %zu draw calls", chunk_count, draw_calls);
+
+    camera_target[0] = (float)world_width * 0.5f;
+    camera_target[1] = 10.0f;
+    camera_target[2] = (float)world_depth * 0.5f;
+    orbit_radius = (float)(world_width > world_depth
+                            ? world_width
+                            : world_depth) * 1.4f;
 
     start_time = tc_window_time();
     last_fps_time = start_time;
@@ -259,8 +320,16 @@ int tc_app_run(int argc, char **argv) {
         }
 
         now = tc_window_time();
-        tc_renderer_frame(&renderer, now - start_time,
-                          framebuffer_width, framebuffer_height);
+        angle = (float)(now - start_time) * 0.10f;
+        camera_eye[0] = camera_target[0] + sinf(angle) * orbit_radius;
+        camera_eye[1] = camera_target[1] + 42.0f;
+        camera_eye[2] = camera_target[2] + cosf(angle) * orbit_radius;
+
+        tc_renderer_begin_frame(&renderer, camera_eye, camera_target,
+                                framebuffer_width, framebuffer_height);
+        for (size_t chunk_index = 0; chunk_index < chunk_count; chunk_index++) {
+            tc_renderer_draw_mesh(&renderer, &render_meshes[chunk_index]);
+        }
         tc_window_swap(&window);
 
         frames_since_report++;
@@ -270,8 +339,10 @@ int tc_app_run(int argc, char **argv) {
         elapsed = now - last_fps_time;
         if (elapsed >= 1.0) {
             fps = (double)frames_since_report / elapsed;
-            snprintf(title, sizeof(title), "ThinkCraft | %.1f FPS | %dx%d",
-                     fps, framebuffer_width, framebuffer_height);
+            snprintf(title, sizeof(title),
+                     "ThinkCraft | %dx%d chunks | %.1f FPS | %dx%d",
+                     world.chunks_x, world.chunks_z, fps,
+                     framebuffer_width, framebuffer_height);
             tc_window_set_title(&window, title);
             tc_log_info("%.1f FPS", fps);
             frames_since_report = 0;
@@ -301,8 +372,26 @@ int tc_app_run(int argc, char **argv) {
                     total_elapsed, total_frames, average_fps);
     }
 
-    tc_renderer_shutdown(&renderer);
-    tc_window_destroy(&window);
+    exit_code = 0;
+
+cleanup:
+    if (mesh_initialized) {
+        tc_mesh_shutdown(&mesh);
+    }
+    if (render_meshes != NULL) {
+        for (size_t chunk_index = 0; chunk_index < chunk_count; chunk_index++) {
+            tc_renderer_destroy_mesh(&render_meshes[chunk_index]);
+        }
+    }
+    if (renderer_initialized) {
+        tc_renderer_shutdown(&renderer);
+    }
+    if (window_created) {
+        tc_window_destroy(&window);
+    }
+    if (world_initialized) {
+        tc_world_shutdown(&world);
+    }
     tc_arena_shutdown(&arena);
-    return 0;
+    return exit_code;
 }

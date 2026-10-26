@@ -116,7 +116,9 @@ void tc_chunk_generate_demo(tc_chunk *chunk) {
                                               TC_CHUNK_BLOCK_COUNT);
 }
 
-uint32_t tc_chunk_visible_face_count(const tc_chunk *chunk) {
+uint32_t tc_chunk_visible_face_count_sampled(const tc_chunk *chunk,
+                                              tc_block_sampler sampler,
+                                              const void *context) {
     uint32_t faces = 0;
 
     if (chunk == NULL) {
@@ -132,11 +134,18 @@ uint32_t tc_chunk_visible_face_count(const tc_chunk *chunk) {
                 }
 
                 for (int direction = 0; direction < 6; direction++) {
-                    uint8_t neighbor = tc_chunk_get(
-                        chunk,
-                        x + neighbor_offsets[direction][0],
-                        y + neighbor_offsets[direction][1],
-                        z + neighbor_offsets[direction][2]);
+                    int neighbor_x = x + neighbor_offsets[direction][0];
+                    int neighbor_y = y + neighbor_offsets[direction][1];
+                    int neighbor_z = z + neighbor_offsets[direction][2];
+                    uint8_t neighbor;
+
+                    if (sampler != NULL) {
+                        neighbor = sampler(context, neighbor_x, neighbor_y,
+                                           neighbor_z);
+                    } else {
+                        neighbor = tc_chunk_get(chunk, neighbor_x, neighbor_y,
+                                                neighbor_z);
+                    }
 
                     if (!tc_block_is_solid(neighbor)) {
                         faces++;
@@ -147,4 +156,8 @@ uint32_t tc_chunk_visible_face_count(const tc_chunk *chunk) {
     }
 
     return faces;
+}
+
+uint32_t tc_chunk_visible_face_count(const tc_chunk *chunk) {
+    return tc_chunk_visible_face_count_sampled(chunk, NULL, NULL);
 }

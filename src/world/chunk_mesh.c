@@ -18,6 +18,14 @@ static uint8_t to_byte(float value) {
     return (uint8_t)(value * 255.0f + 0.5f);
 }
 
+static uint8_t sample_block(const tc_chunk *chunk, tc_block_sampler sampler,
+                            const void *context, int x, int y, int z) {
+    if (sampler != NULL) {
+        return sampler(context, x, y, z);
+    }
+    return tc_chunk_get(chunk, x, y, z);
+}
+
 static void block_face_color(uint8_t block, int axis, int positive,
                              uint8_t color[4]) {
     float base[3] = {1.0f, 0.0f, 1.0f};
@@ -65,8 +73,9 @@ static void block_face_color(uint8_t block, int axis, int positive,
     color[3] = 255;
 }
 
-int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
-                        tc_mesh_stats *stats_out) {
+int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
+                                tc_block_sampler sampler, const void *context,
+                                tc_mesh *mesh, tc_mesh_stats *stats_out) {
     int32_t mask[TC_CHUNK_MASK_CAPACITY];
     tc_mesh_stats stats = {0};
     int dimensions[3] = {
@@ -78,17 +87,23 @@ int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
     int max_y = -1;
     double scan_start;
     double build_start;
+    float origin[3];
 
     if (chunk == NULL || mesh == NULL) {
         return 0;
     }
+
+    origin[0] = (float)chunk->origin_x;
+    origin[1] = (float)chunk->origin_y;
+    origin[2] = (float)chunk->origin_z;
 
     tc_mesh_clear(mesh);
 
     scan_start = tc_time_now();
     stats.solid_blocks = tc_chunk_count_solid(chunk->blocks,
                                               TC_CHUNK_BLOCK_COUNT);
-    stats.visible_faces = tc_chunk_visible_face_count(chunk);
+    stats.visible_faces = tc_chunk_visible_face_count_sampled(
+        chunk, sampler, context);
     stats.scan_ms = (tc_time_now() - scan_start) * 1000.0;
     build_start = tc_time_now();
 
@@ -147,9 +162,11 @@ int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
 
                     neighbor_coordinate[axis]++;
 
-                    a = tc_chunk_get(chunk, coordinate[0], coordinate[1],
+                    a = sample_block(chunk, sampler, context,
+                                     coordinate[0], coordinate[1],
                                      coordinate[2]);
-                    b = tc_chunk_get(chunk, neighbor_coordinate[0],
+                    b = sample_block(chunk, sampler, context,
+                                     neighbor_coordinate[0],
                                      neighbor_coordinate[1],
                                      neighbor_coordinate[2]);
                     a_solid = tc_block_is_solid(a);
@@ -204,10 +221,18 @@ int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
                     p[axis] = coordinate[axis] + 1;
 
                     float positions[4][3] = {
-                        {(float)p[0], (float)p[1], (float)p[2]},
-                        {(float)p[0], (float)p[1], (float)p[2]},
-                        {(float)p[0], (float)p[1], (float)p[2]},
-                        {(float)p[0], (float)p[1], (float)p[2]}
+                        {origin[0] + (float)p[0],
+                         origin[1] + (float)p[1],
+                         origin[2] + (float)p[2]},
+                        {origin[0] + (float)p[0],
+                         origin[1] + (float)p[1],
+                         origin[2] + (float)p[2]},
+                        {origin[0] + (float)p[0],
+                         origin[1] + (float)p[1],
+                         origin[2] + (float)p[2]},
+                        {origin[0] + (float)p[0],
+                         origin[1] + (float)p[1],
+                         origin[2] + (float)p[2]}
                     };
                     float uvs[4][2] = {
                         {0.0f, 0.0f},
@@ -278,4 +303,9 @@ int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
     }
 
     return 1;
+}
+
+int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
+                        tc_mesh_stats *stats) {
+    return tc_chunk_build_mesh_sampled(chunk, NULL, NULL, mesh, stats);
 }

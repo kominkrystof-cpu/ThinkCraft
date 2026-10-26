@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation, not a playable Minecraft clone. The current milestone generates a 16x256x16 voxel chunk, reduces its visible geometry with greedy meshing, and renders it from an orbiting camera.
+The project is currently an engine foundation, not a playable Minecraft clone. The current milestone generates a fixed 5x5 grid of 16x256x16 voxel chunks, meshes each one with neighbor-aware greedy meshing, and renders the 80x80-block world from an orbiting camera.
 
 ## Status
 
@@ -13,7 +13,7 @@ The project is currently an engine foundation, not a playable Minecraft clone. T
 - Target hardware: Intel UHD 620 / i3-10110U-class laptops
 - Target: stable 100 FPS at 1280x720
 
-The current single-chunk benchmark runs at roughly 1,400-1,700 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. That result measures one simple chunk, not a streamed world, and should not be treated as a final world-rendering benchmark.
+The current 5x5 chunk-world benchmark runs at roughly 1,400 to 1,750 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. That result measures a small fixed world, not dynamic chunk streaming, and should not be treated as a final world-rendering benchmark.
 
 ## Current Milestone
 
@@ -23,18 +23,19 @@ The current single-chunk benchmark runs at roughly 1,400-1,700 FPS on the develo
 - Shader loading and compilation with error reporting
 - Depth testing and back-face culling
 - 16x256x16 chunk storage with inline bounds-checked block access
+- Fixed 5x5 chunk world covering 80x80 blocks
 - Deterministic demo terrain with grass, dirt, stone, and sand
-- Greedy meshing across all three axes with internal-face culling
-- Demo chunk reduced from 1,750 visible faces to 415 quads (4.22x)
-- Vertex-colored chunk mesh uploaded to a VBO and EBO
-- Orbiting camera around the first chunk
+- Neighbor-aware greedy meshing across all three axes with internal-face culling
+- Demo world reduced from 19,046 visible faces to 2,674 quads (7.12x)
+- Per-chunk vertex-colored meshes uploaded to VBOs and EBOs, 25 draw calls
+- Orbiting camera around the world center
 - Arena allocator for startup allocations
 - 4x4 matrix math in C, including `look_at`
 - `tc_mat4_mul` implemented in x86-64 NASM
 - `tc_chunk_count_solid` implemented in x86-64 NASM
 - Frame-time and FPS reporting
 - Automated render benchmark and mesh benchmark output
-- Chunk/mesh tests covering greedy merge cases, index bounds, reduction, and repeated build performance
+- Chunk, world, and mesh tests covering boundary culling, greedy merge cases, index bounds, reduction, and repeated build performance
 
 ## Requirements
 
@@ -97,7 +98,7 @@ Controls:
 Escape    close the window
 ```
 
-The first chunk is static. The camera slowly orbits around it. At startup the engine prints the solid block count, visible face count, greedy quad count, reduction factor, and mesh build time.
+The world is static. The camera slowly orbits around its center. At startup the engine prints the world dimensions, solid block count, visible face count, greedy quad count, reduction factor, mesh build time, and draw-call count.
 
 Command-line options:
 
@@ -139,18 +140,19 @@ The benchmark prints the elapsed time, total frames, average FPS, and average mi
 make test
 ```
 
-`make test` runs the portable math and chunk-mesh test suites.
+`make test` runs the portable math, chunk-mesh, and world test suites.
 
 Individual test targets:
 
 ```sh
 make test-math
 make test-chunk-mesh
+make test-world
 ```
 
-The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective and view matrices. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark.
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective and view matrices. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers world-space block access, generation, per-chunk rendering bounds, and neighbor-aware boundary culling.
 
-To run the math tests, chunk tests, and the optional transpiler test:
+To run the math tests, chunk tests, world tests, and the optional transpiler test:
 
 ```sh
 make test-all
@@ -199,9 +201,9 @@ scripts/                Development helper scripts
 
 ## Performance Notes
 
-The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current chunk path uses a flat `uint8_t` block array, an inline index, a three-axis greedy mask, and a single indexed draw call. Important planned work includes:
+The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current world path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, and one indexed draw per chunk. Important planned work includes:
 
-- Neighbor-aware chunk boundaries and multiple loaded chunks
+- Dynamic chunk loading and unloading
 - Texture atlases to replace vertex colors
 - Frustum culling
 - Chunk visibility scheduling
@@ -209,7 +211,7 @@ The project targets frame times that leave headroom on integrated graphics rathe
 - Avoiding per-frame allocation and unnecessary copying
 - Native assembly paths only for verified hotspots
 
-The current chunk benchmark is intentionally small. It validates chunk storage, the greedy mesher, mesh upload, shader attributes, camera math, and the draw path before world streaming is added. The included demo chunk has 3,530 solid blocks; mesh building takes roughly 0.2-0.3 ms on the development machine after warmup.
+The current world benchmark is intentionally small. It validates chunk storage, seamless terrain generation, neighbor-aware greedy meshing, per-chunk mesh upload, shader attributes, camera math, and the draw path before dynamic streaming is added. The included 5x5 world has 88,241 solid blocks and 25 chunk meshes; mesh building takes roughly 10 ms total on the development machine after warmup. Rendering averages roughly 1,400 to 1,750 FPS at 1280x720.
 
 ## Optional Transpiler Experiment
 
@@ -247,11 +249,13 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] Chunk storage and block registry
 - [x] Chunk meshing
 - [x] Greedy meshing
-- [x] Vertex-colored first chunk rendering
+- [x] Multiple chunks and neighbor-aware meshing
+- [x] Vertex-colored world rendering
+- [x] Deterministic demo terrain across a chunk grid
 - [ ] Texture atlas and textured blocks
-- [ ] Multiple chunks and neighbor-aware meshing
+- [ ] Dynamic chunk loading and unloading
 - [ ] Player controller and collision
-- [ ] World generation
+- [ ] Full world generation and biomes
 - [ ] Save and load format
 - [ ] Frustum culling and chunk scheduling
 - [ ] Multithreaded mesh building

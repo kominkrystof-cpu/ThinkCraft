@@ -33,6 +33,7 @@ LDLIBS     := $(GLFW_LIBS) -lm -ldl
 ENGINE_BIN := $(BUILD)/engine/thinkcraft
 TEST_MATH  := $(BUILD)/tests/test_math
 TEST_CHUNK := $(BUILD)/tests/test_chunk_mesh
+TEST_WORLD := $(BUILD)/tests/test_world
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -47,6 +48,7 @@ ENGINE_C_SRCS := \
 	src/math/mat4.c \
 	src/world/chunk.c \
 	src/world/chunk_mesh.c \
+	src/world/world.c \
 	third_party/glad/src/gl.c
 
 ENGINE_ASM_SRCS := src/asm/mat4_mul.asm src/asm/chunk_count_solid.asm
@@ -62,6 +64,17 @@ TEST_MATH_OBJS := \
 
 TEST_CHUNK_OBJS := \
 	$(BUILD)/tests/obj/tests/test_chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/chunk.o \
+	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/gfx/mesh.o \
+	$(BUILD)/tests/obj/src/core/arena.o \
+	$(BUILD)/tests/obj/src/core/log.o \
+	$(BUILD)/tests/obj/src/core/platform.o \
+	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
+
+TEST_WORLD_OBJS := \
+	$(BUILD)/tests/obj/tests/test_world.o \
+	$(BUILD)/tests/obj/src/world/world.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
 	$(BUILD)/tests/obj/src/gfx/mesh.o \
@@ -94,6 +107,10 @@ $(TEST_CHUNK): $(TEST_CHUNK_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_WORLD): $(TEST_WORLD_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -110,7 +127,7 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math test-chunk-mesh
+test: test-math test-chunk-mesh test-world
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
@@ -118,7 +135,10 @@ test-math: $(TEST_MATH)
 test-chunk-mesh: $(TEST_CHUNK)
 	./$(TEST_CHUNK)
 
-test-all: test-math test-chunk-mesh test-transpiler
+test-world: $(TEST_WORLD)
+	./$(TEST_WORLD)
+
+test-all: test-math test-chunk-mesh test-world test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -136,6 +156,6 @@ clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-transpiler transpiler run benchmark clean

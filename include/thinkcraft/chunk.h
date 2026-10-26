@@ -13,6 +13,8 @@
 #define TC_CHUNK_BLOCK_COUNT \
     (TC_CHUNK_SIZE_X * TC_CHUNK_SIZE_Y * TC_CHUNK_SIZE_Z)
 
+typedef uint8_t (*tc_block_sampler)(const void *context, int x, int y, int z);
+
 typedef struct {
     int32_t origin_x;
     int32_t origin_y;
@@ -42,6 +44,9 @@ void tc_chunk_clear(tc_chunk *chunk);
 int tc_chunk_set(tc_chunk *chunk, int x, int y, int z, uint8_t block);
 void tc_chunk_generate_demo(tc_chunk *chunk);
 uint32_t tc_chunk_visible_face_count(const tc_chunk *chunk);
+uint32_t tc_chunk_visible_face_count_sampled(const tc_chunk *chunk,
+                                              tc_block_sampler sampler,
+                                              const void *context);
 
 uint32_t tc_chunk_count_solid(const uint8_t *blocks, size_t count);
 
