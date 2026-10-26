@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates seeded procedural terrain with caves, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, block breaking and placing, an unbreakable bedrock floor, and distance fog.
+The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates seeded procedural terrain with caves, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, block breaking and placing, an unbreakable bedrock floor, distance fog, a main/pause menu, and persistent world saves.
 
 ## Status
 
@@ -15,7 +15,9 @@ The project is currently an engine foundation with a playable first-person demo,
 
 The current streaming-world benchmark runs at roughly 1,100 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. It renders a 9x9 ring around the player, frustum-culls to roughly 33 visible chunks per frame, draws visible chunks front-to-back, spreads boundary remeshing across frames when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
 
-## Current Milestone
+## Milestone: Persistent Worlds and Menus
+
+This milestone makes world state durable across sessions. ThinkCraft now boots into a main menu, supports New World and Continue, exposes a pause menu, renders UI text without external assets, and stores seeds, player pose, hotbar selection, and block edits in a versioned binary save.
 
 - 1280x720 OpenGL 3.3 core window
 - GLFW window creation, key-state input, mouse capture, and clean shutdown
@@ -44,17 +46,22 @@ The current streaming-world benchmark runs at roughly 1,100 FPS on the developme
 - Gravity, jumping, AABB voxel collision, one-block auto-step, and surface spawning
 - Unbreakable bedrock floor at y=0 and a hard void-floor collision clamp
 - Procedural stone, grass, dirt, and sand terrain with seeded hills, sand patches, stone peaks, and caves
+- Main menu with New World, Continue, and Quit
+- Pause menu with Resume, Save, Load, and Quit to Menu
+- Persistent binary saves containing the seed, player pose, hotbar selection, and block edits
+- Built-in 5x7 uppercase bitmap text renderer for menu UI and status messages
 - Arena allocator for startup allocations
 - 4x4 matrix math in C, including `look_at`
 - `tc_mat4_mul` implemented in x86-64 NASM
 - `tc_chunk_count_solid` implemented in x86-64 NASM
 - Frame-time and FPS reporting
 - Automated render benchmark and mesh benchmark output
-- Chunk, world, player, texture, raycast, and mesh tests covering boundary
-  culling, streaming, generation determinism, seed stability, cave
+- Chunk, world, save, player, texture, raycast, and mesh tests covering
+  boundary culling, streaming, generation determinism, seed stability, cave
   generation, bedrock protection, void-floor collision, negative
   coordinates, collision, jumping, look limits, atlas tile data, voxel
-  picking, and placement overlap
+  picking, placement overlap, save round trips, and edit persistence across
+  chunk reloads
 
 ## Requirements
 
@@ -114,17 +121,23 @@ or directly:
 Controls:
 
 ```text
-Left click    capture the mouse; break the targeted block
+Left click    capture the mouse; while captured, break the targeted block
 Right click   place the selected block
-WASD          move
+WASD          move; navigate menus when paused
 Mouse         look around
-Space         jump
+Space         jump; activate menu item
 Ctrl          sprint
 1-4           select grass, dirt, stone, or sand
-Escape        release the mouse; press again to close the window
+Escape        release the mouse; press again to pause; from the main menu, quit
+F5            quick save while playing or paused
+F9            quick load while playing or paused
+Up/Down       navigate menus
+Enter/Space   activate menu item
 ```
 
-The world streams around the player. At startup the engine prints the seed, streaming-ring dimensions, solid block count, visible face count, greedy quad count, reduction factor, mesh build time, and draw-call count. When the player crosses a chunk boundary, terrain generation is queued and remeshing is spread across frames under a small time budget. Block edits rebuild the touched chunk first and defer neighbor updates by a frame.
+The game starts at the main menu. New World regenerates the world from the configured seed, Continue loads the save at the configured path, and Quit exits. The pause menu can save or load without leaving the game. Saves default to `saves/world.tc`.
+
+The world streams around the player. At startup the engine prints the seed, streaming-ring dimensions, solid block count, visible face count, greedy quad count, reduction factor, mesh build time, and draw-call count. When the player crosses a chunk boundary, terrain generation is queued and remeshing is spread across frames under a small time budget. Block edits rebuild the touched chunk first and defer neighbor updates by a frame; edits are also appended to a persistent edit log so they survive chunk unload/reload and saving.
 
 Command-line options:
 
@@ -136,12 +149,26 @@ Command-line options:
 --benchmark     exit after the benchmark duration
 --seconds N     benchmark duration in seconds
 --seed N        terrain seed (default 0x5eed1234)
+--save PATH     save file path (default saves/world.tc)
 --render-scale N  internal render scale 0.5-1.0 (default 1.0, 0 = adaptive)
 --target-fps N  adaptive render-scale FPS target (default 500)
 --help          show help
 ```
 
 The interactive default enables vsync. Benchmark mode disables vsync unless `--vsync` is explicitly passed.
+
+## Saves
+
+Saves are written to `saves/world.tc` by default, or to the path passed with `--save`. The save directory is created automatically and the destination is replaced atomically through a temporary file and `rename`.
+
+A save stores:
+
+- The terrain seed, so the generated world can be rebuilt exactly
+- Player position, yaw, and pitch
+- The selected hotbar slot
+- An ordered log of block edits, including negative coordinates
+
+The current format is little-endian `TCSV` version 1. It has a 40-byte header followed by 13-byte edit records (`i32 x`, `i32 y`, `i32 z`, `u8 block`). Reads validate the magic, version, edit count, player pose, hotbar slot, and block coordinates before applying anything. Edits are replayed after chunk regeneration, which makes them survive both streaming reloads and new sessions.
 
 ## Benchmark
 
@@ -169,7 +196,7 @@ The benchmark prints the elapsed time, total frames, average FPS, average millis
 make test
 ```
 
-`make test` runs the portable math, chunk-mesh, world, player, texture, and raycast test suites.
+`make test` runs the portable math, chunk-mesh, world, save, player, texture, and raycast test suites.
 
 Individual test targets:
 
@@ -177,14 +204,15 @@ Individual test targets:
 make test-math
 make test-chunk-mesh
 make test-world
+make test-save
 make test-player
 make test-texture
 make test-raycast
 ```
 
-The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, seed stability, cave generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, void-floor collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, sand, and bedrock palettes. The raycast test covers forward and negative-coordinate voxel hits, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected. The world test regenerates terrain under different seeds, checks cave placement without surface breaches, and verifies that the bedrock floor cannot be broken or replaced.
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, seed stability, cave generation, per-chunk rendering bounds, neighbor-aware boundary culling, and edit replay after chunk reload. The save test covers binary round trips, negative edit coordinates, applying a save to a regenerated world, and persistence through chunk unload/reload. The player test covers gravity, ground contact, jumping, wall collision, void-floor collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, sand, and bedrock palettes. The raycast test covers forward and negative-coordinate voxel hits, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected. The world test regenerates terrain under different seeds, checks cave placement without surface breaches, and verifies that the bedrock floor cannot be broken or replaced.
 
-To run the math, chunk, world, player, texture, raycast, and optional transpiler tests:
+To run the math, chunk, world, save, player, texture, raycast, and optional transpiler tests:
 
 ```sh
 make test-all
@@ -208,7 +236,7 @@ src/core/               Arena allocator, logging, platform helpers
 src/gfx/                Window, shader, mesh, renderer, HUD, and atlas code
 src/math/               Matrix math in C
 src/player/             First-person movement and voxel collision
-src/world/              Chunk storage, streaming world, terrain, raycasting, and meshing
+src/world/              Chunk storage, streaming world, terrain, raycasting, meshing, and saves
 src/asm/                NASM hot paths
 shaders/                GLSL shaders
 third_party/glad/       Vendored Glad 3.3 core loader
@@ -292,8 +320,9 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] Bedrock floor and void safety
 - [x] Block picking, breaking, and placing
 - [x] Frustum culling and front-to-back chunk drawing
+- [x] Save and load with persistent block edits
+- [x] Main and pause menus with bitmap text
 - [ ] Biomes and structures
-- [ ] Save and load format
 - [ ] Chunk visibility scheduling
 - [ ] Multithreaded mesh building
 - [ ] Portable release packaging

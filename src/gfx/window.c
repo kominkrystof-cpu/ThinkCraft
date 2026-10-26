@@ -29,6 +29,17 @@ static int map_key(int key) {
             return TC_KEY_CTRL;
         case GLFW_KEY_ESCAPE:
             return TC_KEY_ESCAPE;
+        case GLFW_KEY_ENTER:
+        case GLFW_KEY_KP_ENTER:
+            return TC_KEY_ENTER;
+        case GLFW_KEY_UP:
+            return TC_KEY_UP;
+        case GLFW_KEY_DOWN:
+            return TC_KEY_DOWN;
+        case GLFW_KEY_F5:
+            return TC_KEY_F5;
+        case GLFW_KEY_F9:
+            return TC_KEY_F9;
         case GLFW_KEY_1:
             return TC_KEY_1;
         case GLFW_KEY_2:

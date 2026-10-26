@@ -321,6 +321,64 @@ static uint32_t digest_chunk(const tc_chunk *chunk) {
     return digest;
 }
 
+static int test_edit_persistence(void) {
+    tc_arena arena;
+    tc_world world;
+    const uint32_t seed = 0x0badc0deu;
+    int height;
+    int ok = 1;
+
+    if (!tc_arena_init(&arena, 4 * 1024 * 1024)) {
+        return 0;
+    }
+
+    if (!tc_world_init(&world, &arena, 1)) {
+        tc_arena_shutdown(&arena);
+        return 0;
+    }
+
+    tc_world_set_seed(&world, seed);
+    tc_world_generate_terrain(&world);
+    height = tc_terrain_height(2, 2, seed);
+
+    ok = ok && check(tc_world_set_block(&world, 2, 100, 2,
+                                        TC_BLOCK_STONE),
+                     "stone edit failed")
+      && check(tc_world_set_block(&world, 2, height, 2,
+                                  TC_BLOCK_AIR),
+               "surface removal failed")
+      && check(tc_world_set_block(&world, 20, 100, 2, TC_BLOCK_SAND),
+               "positive chunk edit failed")
+      && check(tc_world_set_block(&world, 35, 100, 35,
+                                  TC_BLOCK_STONE) == 0,
+               "unloaded world edit accepted")
+      && check(tc_world_edit_count(&world) == 3, "wrong persistent edit count")
+      && check(tc_world_update(&world, 2, 2), "far edit update failed")
+      && check(tc_world_update(&world, 0, 0), "return edit update failed")
+      && check(tc_world_get_block(&world, 2, 100, 2) == TC_BLOCK_STONE,
+               "stone edit was lost after reload")
+      && check(tc_world_get_block(&world, 2, height, 2) == TC_BLOCK_AIR,
+               "surface removal was lost after reload")
+      && check(tc_world_get_block(&world, 20, 100, 2) == TC_BLOCK_SAND,
+               "positive chunk edit was lost after reload")
+      && check(tc_world_edit_count(&world) == 3,
+               "persistent edit count changed after reload");
+
+    tc_world_set_seed(&world, seed);
+    tc_world_generate_terrain(&world);
+    ok = ok && check(tc_world_edit_count(&world) == 0,
+                     "seed change did not clear edits")
+      && check(tc_world_get_block(&world, 2, 100, 2) == TC_BLOCK_AIR,
+               "cleared edit still present after regeneration");
+
+    printf("edit persistence: %zu edits replayed across chunk reloads\n",
+           tc_world_edit_count(&world));
+
+    tc_world_shutdown(&world);
+    tc_arena_shutdown(&arena);
+    return ok;
+}
+
 static int test_seeded_terrain(void) {
     tc_arena arena;
     tc_world world;
@@ -426,6 +484,7 @@ int main(void) {
     ok = ok && test_streaming_update();
     ok = ok && test_boundary_mesh();
     ok = ok && test_generated_world();
+    ok = ok && test_edit_persistence();
     ok = ok && test_seeded_terrain();
 
     if (!ok) {

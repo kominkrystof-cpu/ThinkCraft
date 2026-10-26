@@ -8,7 +8,9 @@
 #include "thinkcraft/player.h"
 #include "thinkcraft/raycast.h"
 #include "thinkcraft/renderer.h"
+#include "thinkcraft/save.h"
 #include "thinkcraft/terrain.h"
+#include "thinkcraft/text.h"
 #include "thinkcraft/window.h"
 #include "thinkcraft/world.h"
 
@@ -29,7 +31,53 @@ typedef struct app_options {
     uint32_t seed;
     float render_scale;
     float target_fps;
+    char save_path[4096];
 } app_options;
+
+typedef enum {
+    APP_STATE_MENU,
+    APP_STATE_PLAYING,
+    APP_STATE_PAUSED
+} app_state;
+
+typedef enum {
+    MENU_NEW_WORLD,
+    MENU_CONTINUE,
+    MENU_SAVE,
+    MENU_LOAD,
+    MENU_RESUME,
+    MENU_QUIT,
+    MENU_QUIT_TO_MENU
+} menu_action;
+
+typedef struct {
+    menu_action action;
+    const char *label;
+} menu_item;
+
+typedef struct {
+    char text[128];
+    float color[3];
+    double until;
+} app_status;
+
+static const menu_item main_menu_with_continue[] = {
+    {MENU_NEW_WORLD, "NEW WORLD"},
+    {MENU_CONTINUE, "CONTINUE"},
+    {MENU_QUIT, "QUIT"}
+};
+
+static const menu_item main_menu_without_continue[] = {
+    {MENU_NEW_WORLD, "NEW WORLD"},
+    {MENU_QUIT, "QUIT"}
+};
+
+static const menu_item pause_menu_items[] = {
+    {MENU_RESUME, "RESUME"},
+    {MENU_SAVE, "SAVE"},
+    {MENU_LOAD, "LOAD"},
+    {MENU_QUIT_TO_MENU, "QUIT TO MENU"}
+};
 
 typedef struct hotbar_entry {
     uint8_t block;
@@ -75,6 +123,8 @@ static void print_help(const char *program) {
     printf("  --render-scale N  Internal render scale 0.5-1.0 "
            "(default 1.0, 0 = adaptive)\n");
     printf("  --target-fps N  Adaptive render-scale FPS target (default 500)\n");
+    printf("  --save PATH     Save file path (default %s)\n",
+           TC_SAVE_DEFAULT_PATH);
     printf("  --help          Show this help\n");
     printf("\n");
     printf("Controls:\n");
@@ -82,10 +132,13 @@ static void print_help(const char *program) {
     printf("  Mouse           Look around\n");
     printf("  Space           Jump\n");
     printf("  Ctrl            Sprint\n");
-    printf("  Escape          Release the mouse, then close the window\n");
+    printf("  Escape          Release the mouse; press again to pause\n");
+    printf("  F5              Quick save\n");
+    printf("  F9              Quick load\n");
     printf("  Left click      Capture the mouse; break the targeted block\n");
     printf("  Right click     Place the selected block\n");
     printf("  1-4             Select grass, dirt, stone, or sand\n");
+    printf("  Menu            W/S or Up/Down select, Enter activate\n");
 }
 
 static int parse_options(int argc, char **argv, app_options *options) {
@@ -98,6 +151,8 @@ static int parse_options(int argc, char **argv, app_options *options) {
     options->seed = TC_TERRAIN_DEFAULT_SEED;
     options->render_scale = 1.0f;
     options->target_fps = 500.0f;
+    snprintf(options->save_path, sizeof(options->save_path), "%s",
+             TC_SAVE_DEFAULT_PATH);
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -142,6 +197,16 @@ static int parse_options(int argc, char **argv, app_options *options) {
                 return -1;
             }
             options->render_scale = value;
+        } else if (strcmp(argv[i], "--save") == 0 && i + 1 < argc) {
+            const char *value = argv[++i];
+
+            if (*value == '\0'
+                || strlen(value) >= sizeof(options->save_path)) {
+                tc_log_error("invalid save path: %s", value);
+                return -1;
+            }
+            snprintf(options->save_path, sizeof(options->save_path), "%s",
+                     value);
         } else if (strcmp(argv[i], "--target-fps") == 0 && i + 1 < argc) {
             char *end = NULL;
             float value;
@@ -493,6 +558,240 @@ static int apply_block_edit(tc_world *world, tc_renderer *renderer,
     return 1;
 }
 
+static void app_status_set(app_status *status, double now, float red,
+                           float green, float blue, const char *text) {
+    snprintf(status->text, sizeof(status->text), "%s", text);
+    status->color[0] = red;
+    status->color[1] = green;
+    status->color[2] = blue;
+    status->until = now + 2.5;
+}
+
+static void app_menu_get(app_state state, int has_continue,
+                         const menu_item **items, int *count) {
+    if (state == APP_STATE_PAUSED) {
+        *items = pause_menu_items;
+        *count = (int)(sizeof(pause_menu_items) / sizeof(pause_menu_items[0]));
+    } else if (has_continue) {
+        *items = main_menu_with_continue;
+        *count = (int)(sizeof(main_menu_with_continue)
+                       / sizeof(main_menu_with_continue[0]));
+    } else {
+        *items = main_menu_without_continue;
+        *count = (int)(sizeof(main_menu_without_continue)
+                       / sizeof(main_menu_without_continue[0]));
+    }
+}
+
+static int rebuild_all_world_meshes(tc_world *world, tc_renderer *renderer,
+                                    tc_mesh *mesh,
+                                    tc_render_mesh *render_meshes,
+                                    size_t *draw_calls) {
+    tc_mesh_stats stats;
+    size_t remeshed = 0;
+    size_t pending = 0;
+    int slot_count = world->size * world->size;
+
+    for (int index = 0; index < slot_count; index++) {
+        if (world->slots[index].loaded) {
+            world->slots[index].dirty = 1;
+        }
+    }
+
+    return rebuild_dirty_chunks(world, renderer, mesh, render_meshes, SIZE_MAX,
+                                0.0, -1, &stats, &remeshed, &pending,
+                                draw_calls);
+}
+
+static int start_new_world(tc_world *world, tc_player *player, uint32_t seed,
+                           int *selected_hotbar, tc_renderer *renderer,
+                           tc_mesh *mesh, tc_render_mesh *render_meshes,
+                           size_t *draw_calls) {
+    tc_world_set_seed(world, seed);
+    if (!tc_world_update(world, 0, 0)) {
+        return 0;
+    }
+    tc_world_generate_terrain(world);
+    if (!tc_player_spawn(player, world, 8.5f, 8.5f, 0.0f, -0.12f)) {
+        return 0;
+    }
+
+    *selected_hotbar = 0;
+    return rebuild_all_world_meshes(world, renderer, mesh, render_meshes,
+                                    draw_calls);
+}
+
+static int save_game(const app_options *options, const tc_world *world,
+                     const tc_player *player, int selected_hotbar) {
+    if (!tc_save_write(options->save_path, world, player, selected_hotbar)) {
+        return 0;
+    }
+
+    tc_log_info("saved world to %s (seed %u, %zu edits)", options->save_path,
+                world->seed, world->edit_count);
+    return 1;
+}
+
+static int load_game(const app_options *options, tc_world *world,
+                     tc_player *player, int *selected_hotbar,
+                     tc_renderer *renderer, tc_mesh *mesh,
+                     tc_render_mesh *render_meshes, size_t *draw_calls) {
+    tc_save_data data;
+    uint32_t seed;
+    size_t edit_count;
+    int center_chunk_x;
+    int center_chunk_z;
+
+    if (!tc_path_exists(options->save_path)) {
+        tc_log_info("no save file at %s", options->save_path);
+        return 0;
+    }
+
+    if (!tc_save_read(options->save_path, &data)) {
+        return 0;
+    }
+
+    tc_world_set_seed(world, data.seed);
+    center_chunk_x = tc_math_floor_div((int)floorf(data.position[0]),
+                                       TC_CHUNK_SIZE_X);
+    center_chunk_z = tc_math_floor_div((int)floorf(data.position[2]),
+                                       TC_CHUNK_SIZE_Z);
+    if (!tc_world_update(world, center_chunk_x, center_chunk_z)) {
+        tc_save_data_shutdown(&data);
+        return 0;
+    }
+
+    tc_world_generate_terrain(world);
+
+    for (size_t index = 0; index < data.edit_count; index++) {
+        const tc_world_edit *edit = &data.edits[index];
+
+        if (!tc_world_add_edit(world, edit->x, edit->y, edit->z,
+                               edit->block)) {
+            tc_log_error("failed to apply save edit at (%d, %d, %d)",
+                         edit->x, edit->y, edit->z);
+            tc_save_data_shutdown(&data);
+            return 0;
+        }
+    }
+
+    tc_player_init(player, data.position, data.yaw, data.pitch);
+    *selected_hotbar = data.selected_hotbar;
+    seed = data.seed;
+    edit_count = tc_world_edit_count(world);
+    tc_save_data_shutdown(&data);
+
+    if (!rebuild_all_world_meshes(world, renderer, mesh, render_meshes,
+                                  draw_calls)) {
+        return 0;
+    }
+
+    tc_log_info("loaded world from %s (seed %u, %zu edits)", options->save_path,
+                seed, edit_count);
+    return 1;
+}
+
+static void draw_text_centered(tc_text_renderer *text, const char *string,
+                               int framebuffer_width, int y, float scale,
+                               float red, float green, float blue) {
+    int width = tc_text_width(string, scale);
+
+    tc_text_draw(text, string, (framebuffer_width - width) / 2, y, scale, red,
+                 green, blue);
+}
+
+static void draw_menu(tc_text_renderer *text, int framebuffer_width,
+                      int framebuffer_height, const menu_item *items,
+                      int count, int selected, const char *title,
+                      const app_status *status, double now, int paused) {
+    const float item_scale = 2.0f;
+    const int line_height = 28;
+    int panel_x = 0;
+    int panel_y = 0;
+    int panel_width = framebuffer_width;
+    int panel_height = framebuffer_height;
+    int title_y;
+    int items_y;
+    int footer_y;
+    int status_y;
+
+    if (paused) {
+        panel_width = framebuffer_width - 80;
+        if (panel_width > 560) {
+            panel_width = 560;
+        }
+        if (panel_width < 240) {
+            panel_width = framebuffer_width - 24;
+        }
+        panel_height = framebuffer_height - 160;
+        if (panel_height > 380) {
+            panel_height = 380;
+        }
+        if (panel_height < 240) {
+            panel_height = framebuffer_height - 48;
+        }
+        panel_x = (framebuffer_width - panel_width) / 2;
+        panel_y = (framebuffer_height - panel_height) / 2;
+
+        tc_hud_draw_rect(panel_x - 4, panel_y - 4, panel_width + 8,
+                         panel_height + 8, 0.52f, 0.56f, 0.61f);
+        tc_hud_draw_rect(panel_x, panel_y, panel_width, panel_height,
+                         0.055f, 0.065f, 0.085f);
+    } else {
+        tc_hud_draw_rect(0, 0, framebuffer_width, framebuffer_height,
+                         0.035f, 0.045f, 0.060f);
+    }
+
+    title_y = paused ? panel_y + 30 : framebuffer_height / 5;
+    items_y = paused ? panel_y + 112
+                     : framebuffer_height / 2 - (count * line_height) / 2;
+    footer_y = paused ? panel_y + panel_height - 62
+                      : framebuffer_height - 78;
+    status_y = paused ? panel_y + panel_height - 28
+                      : framebuffer_height - 38;
+
+    tc_text_begin(text, framebuffer_width, framebuffer_height);
+
+    draw_text_centered(text, title, framebuffer_width, title_y,
+                       paused ? 3.0f : 4.0f, 0.96f, 0.90f, 0.62f);
+    if (!paused) {
+        draw_text_centered(text, "A TINY VOXEL ENGINE", framebuffer_width,
+                           title_y + 52, 1.5f, 0.55f, 0.62f, 0.70f);
+    }
+
+    for (int index = 0; index < count; index++) {
+        char line[96];
+        int y = items_y + index * line_height;
+        float red = index == selected ? 1.0f : 0.78f;
+        float green = index == selected ? 0.90f : 0.81f;
+        float blue = index == selected ? 0.45f : 0.85f;
+
+        snprintf(line, sizeof(line), "%c %s", index == selected ? '>' : ' ',
+                 items[index].label);
+        draw_text_centered(text, line, framebuffer_width, y, item_scale,
+                           red, green, blue);
+    }
+
+    if (paused) {
+        draw_text_centered(text, "ESC RESUME   F5 SAVE   F9 LOAD",
+                           framebuffer_width, footer_y, 1.5f, 0.48f, 0.53f,
+                           0.60f);
+    } else {
+        draw_text_centered(text, "W/S OR UP/DOWN SELECT", framebuffer_width,
+                           footer_y, 1.5f, 0.48f, 0.53f, 0.60f);
+        draw_text_centered(text, "ENTER ACTIVATE", framebuffer_width,
+                           footer_y + 20, 1.5f, 0.48f, 0.53f, 0.60f);
+    }
+
+    if (status->until > now && status->text[0] != '\0') {
+        draw_text_centered(text, status->text, framebuffer_width, status_y,
+                           2.0f, status->color[0], status->color[1],
+                           status->color[2]);
+    }
+
+    tc_text_end(text);
+}
+
 int tc_app_run(int argc, char **argv) {
     const float spawn_x = 8.5f;
     const float spawn_z = 8.5f;
@@ -502,9 +801,12 @@ int tc_app_run(int argc, char **argv) {
     tc_mesh mesh;
     tc_window window;
     tc_renderer renderer;
+    tc_text_renderer text;
     tc_render_mesh *render_meshes = NULL;
     size_t *draw_order = NULL;
     app_options options;
+    app_status status;
+    app_state state;
     char shader_dir[4096];
     char title[256];
     double start_time = 0.0;
@@ -524,10 +826,13 @@ int tc_app_run(int argc, char **argv) {
     int frames_since_report = 0;
     int selected_hotbar = 0;
     int running = 1;
+    int main_menu_has_continue = 0;
+    int menu_selection = 0;
     int parse_result;
     int world_initialized = 0;
     int window_created = 0;
     int renderer_initialized = 0;
+    int text_initialized = 0;
     int mesh_initialized = 0;
     int exit_code = 1;
     float render_scale = 1.0f;
@@ -539,6 +844,10 @@ int tc_app_run(int argc, char **argv) {
     if (parse_result == 0) {
         return 0;
     }
+
+    memset(&status, 0, sizeof(status));
+    state = options.benchmark ? APP_STATE_PLAYING : APP_STATE_MENU;
+    main_menu_has_continue = tc_path_exists(options.save_path);
 
     for (int index = 0; index < HOTBAR_COUNT; index++) {
         hud_swatches[index] = hotbar[index].swatch;
@@ -580,6 +889,8 @@ int tc_app_run(int argc, char **argv) {
 
     tc_log_info("ThinkCraft starting");
     tc_log_info("shader directory: %s", shader_dir);
+    tc_log_info("save file: %s (%s)", options.save_path,
+                main_menu_has_continue ? "continue available" : "new world");
 
     if (!tc_window_create(&window, options.width, options.height, options.vsync,
                           "ThinkCraft")) {
@@ -592,6 +903,12 @@ int tc_app_run(int argc, char **argv) {
         goto cleanup;
     }
     renderer_initialized = 1;
+
+    if (!tc_text_init(&text, &arena, shader_dir)) {
+        tc_log_error("text renderer initialization failed");
+        goto cleanup;
+    }
+    text_initialized = 1;
 
     if (options.render_scale > 0.0f) {
         render_scale = options.render_scale;
@@ -659,9 +976,12 @@ int tc_app_run(int argc, char **argv) {
     tc_log_info("%zu chunks, %zu draw calls", initial_remeshed, draw_calls);
 
     if (!options.benchmark) {
-        tc_log_info("controls: click to capture, WASD move, mouse look, "
-                    "Space jump, Ctrl sprint, 1-4 select block, "
-                    "left/right break/place, Escape release");
+        tc_log_info("controls: WASD move, mouse look, Space jump, Ctrl sprint, "
+                    "1-4 select block, left/right break/place, "
+                    "Escape pause, F5 save, F9 load");
+        if (state == APP_STATE_MENU) {
+            tc_log_info("main menu active: W/S or Up/Down select, Enter activate");
+        }
     }
 
     start_time = tc_window_time();
@@ -684,6 +1004,8 @@ int tc_app_run(int argc, char **argv) {
         float target[3];
         float frustum_planes[6][4];
         tc_player_input input = {0.0f, 0.0f, 0, 0};
+        const menu_item *menu_items = NULL;
+        int menu_count = 0;
 
         tc_window_poll();
         tc_window_framebuffer_size(&window, &framebuffer_width,
@@ -698,96 +1020,220 @@ int tc_app_run(int argc, char **argv) {
             dt = 0.1;
         }
 
-        if (tc_window_key_pressed(&window, TC_KEY_ESCAPE)) {
-            if (tc_window_mouse_captured(&window)) {
-                tc_window_set_mouse_captured(&window, 0);
-            } else {
-                running = 0;
-            }
-        }
-
-        captured = tc_window_mouse_captured(&window);
-        captured_before = captured;
-        if (!options.benchmark && !captured
-            && tc_window_mouse_pressed(&window, TC_MOUSE_LEFT)) {
-            tc_window_set_mouse_captured(&window, 1);
-            captured = 1;
-        }
-
         if (framebuffer_width <= 0 || framebuffer_height <= 0) {
             tc_window_end_frame(&window);
             tc_sleep_ms(10.0);
             continue;
         }
 
-        if (captured) {
-            float mouse_dx;
-            float mouse_dy;
-
-            tc_window_consume_mouse_delta(&window, &mouse_dx, &mouse_dy);
-            tc_player_look(&player, mouse_dx, mouse_dy, 0.0022f);
-
-            if (tc_window_key_down(&window, TC_KEY_W)) {
-                input.forward += 1.0f;
+        if (tc_window_key_pressed(&window, TC_KEY_ESCAPE)) {
+            if (state == APP_STATE_PLAYING) {
+                if (tc_window_mouse_captured(&window)) {
+                    tc_window_set_mouse_captured(&window, 0);
+                } else {
+                    state = APP_STATE_PAUSED;
+                    menu_selection = 0;
+                    tc_window_set_mouse_captured(&window, 0);
+                    tc_log_info("paused");
+                }
+            } else if (state == APP_STATE_PAUSED) {
+                state = APP_STATE_PLAYING;
+                tc_log_info("resumed");
+            } else {
+                running = 0;
             }
-            if (tc_window_key_down(&window, TC_KEY_S)) {
-                input.forward -= 1.0f;
+        }
+
+        if (tc_window_key_pressed(&window, TC_KEY_F5)
+            && state != APP_STATE_MENU) {
+            if (save_game(&options, &world, &player, selected_hotbar)) {
+                main_menu_has_continue = 1;
+                app_status_set(&status, now, 0.55f, 0.95f, 0.55f, "SAVED");
+            } else {
+                app_status_set(&status, now, 0.95f, 0.45f, 0.40f,
+                               "SAVE FAILED");
             }
-            if (tc_window_key_down(&window, TC_KEY_D)) {
-                input.strafe += 1.0f;
+        }
+
+        if (tc_window_key_pressed(&window, TC_KEY_F9)
+            && state != APP_STATE_MENU) {
+            if (load_game(&options, &world, &player, &selected_hotbar,
+                          &renderer, &mesh, render_meshes, &draw_calls)) {
+                state = APP_STATE_PLAYING;
+                main_menu_has_continue = 1;
+                menu_selection = 0;
+                app_status_set(&status, now, 0.55f, 0.95f, 0.55f, "LOADED");
+            } else {
+                app_status_set(&status, now, 0.95f, 0.45f, 0.40f,
+                               "LOAD FAILED");
             }
-            if (tc_window_key_down(&window, TC_KEY_A)) {
-                input.strafe -= 1.0f;
+        }
+
+        if (state != APP_STATE_PLAYING) {
+            app_menu_get(state, main_menu_has_continue, &menu_items,
+                         &menu_count);
+            if (menu_selection >= menu_count) {
+                menu_selection = menu_count - 1;
+            }
+            if (menu_selection < 0) {
+                menu_selection = 0;
             }
 
-            input.jump = tc_window_key_down(&window, TC_KEY_SPACE);
-            input.sprint = tc_window_key_down(&window, TC_KEY_CTRL);
+            if (tc_window_key_pressed(&window, TC_KEY_UP)
+                || tc_window_key_pressed(&window, TC_KEY_W)) {
+                menu_selection = (menu_selection + menu_count - 1)
+                               % menu_count;
+            }
+            if (tc_window_key_pressed(&window, TC_KEY_DOWN)
+                || tc_window_key_pressed(&window, TC_KEY_S)) {
+                menu_selection = (menu_selection + 1) % menu_count;
+            }
 
-            for (int index = 0; index < HOTBAR_COUNT; index++) {
-                if (tc_window_key_pressed(&window,
-                                          (tc_key)(TC_KEY_1 + index))) {
-                    if (selected_hotbar != index) {
-                        selected_hotbar = index;
-                        tc_log_info("selected block: %s",
-                                    hotbar[index].name);
-                    }
+            if (tc_window_key_pressed(&window, TC_KEY_ENTER)
+                || tc_window_key_pressed(&window, TC_KEY_SPACE)) {
+                menu_action action = menu_items[menu_selection].action;
+
+                switch (action) {
+                    case MENU_NEW_WORLD:
+                        if (start_new_world(&world, &player, options.seed,
+                                            &selected_hotbar, &renderer,
+                                            &mesh, render_meshes,
+                                            &draw_calls)) {
+                            state = APP_STATE_PLAYING;
+                            tc_log_info("new world seed: %u", world.seed);
+                            app_status_set(&status, now, 0.55f, 0.95f, 0.55f,
+                                           "NEW WORLD");
+                        } else {
+                            app_status_set(&status, now, 0.95f, 0.45f, 0.40f,
+                                           "WORLD FAILED");
+                        }
+                        break;
+                    case MENU_CONTINUE:
+                    case MENU_LOAD:
+                        if (load_game(&options, &world, &player,
+                                      &selected_hotbar, &renderer, &mesh,
+                                      render_meshes, &draw_calls)) {
+                            state = APP_STATE_PLAYING;
+                            main_menu_has_continue = 1;
+                            menu_selection = 0;
+                            app_status_set(&status, now, 0.55f, 0.95f, 0.55f,
+                                           "LOADED");
+                        } else {
+                            app_status_set(&status, now, 0.95f, 0.45f, 0.40f,
+                                           "LOAD FAILED");
+                        }
+                        break;
+                    case MENU_SAVE:
+                        if (save_game(&options, &world, &player,
+                                      selected_hotbar)) {
+                            main_menu_has_continue = 1;
+                            app_status_set(&status, now, 0.55f, 0.95f, 0.55f,
+                                           "SAVED");
+                        } else {
+                            app_status_set(&status, now, 0.95f, 0.45f, 0.40f,
+                                           "SAVE FAILED");
+                        }
+                        break;
+                    case MENU_RESUME:
+                        state = APP_STATE_PLAYING;
+                        break;
+                    case MENU_QUIT_TO_MENU:
+                        state = APP_STATE_MENU;
+                        tc_log_info("returned to main menu");
+                        menu_selection = 0;
+                        main_menu_has_continue =
+                            tc_path_exists(options.save_path);
+                        tc_window_set_mouse_captured(&window, 0);
+                        break;
+                    case MENU_QUIT:
+                        running = 0;
+                        break;
                 }
             }
         }
 
-        tc_player_update(&player, &world, &input, (float)dt);
+        captured = 0;
+        captured_before = 0;
 
-        if (player.position[1] < -32.0f) {
-            float position[3] = {spawn_x, 40.0f, spawn_z};
+        if (state == APP_STATE_PLAYING) {
+            captured = tc_window_mouse_captured(&window);
+            captured_before = captured;
+            if (!options.benchmark && !captured
+                && tc_window_mouse_pressed(&window, TC_MOUSE_LEFT)) {
+                tc_window_set_mouse_captured(&window, 1);
+                captured = 1;
+            }
 
-            tc_log_info("player fell out of the world, respawning");
-            tc_player_init(&player, position, 0.0f, -0.12f);
-        }
+            if (captured) {
+                float mouse_dx;
+                float mouse_dy;
 
-        center_chunk_x = tc_math_floor_div((int)floorf(player.position[0]),
-                                           TC_CHUNK_SIZE_X);
-        center_chunk_z = tc_math_floor_div((int)floorf(player.position[2]),
-                                           TC_CHUNK_SIZE_Z);
+                tc_window_consume_mouse_delta(&window, &mouse_dx, &mouse_dy);
+                tc_player_look(&player, mouse_dx, mouse_dy, 0.0022f);
 
-        if (center_chunk_x != world.center_chunk_x
-            || center_chunk_z != world.center_chunk_z) {
-            double stream_start = tc_time_now();
+                if (tc_window_key_down(&window, TC_KEY_W)) {
+                    input.forward += 1.0f;
+                }
+                if (tc_window_key_down(&window, TC_KEY_S)) {
+                    input.forward -= 1.0f;
+                }
+                if (tc_window_key_down(&window, TC_KEY_D)) {
+                    input.strafe += 1.0f;
+                }
+                if (tc_window_key_down(&window, TC_KEY_A)) {
+                    input.strafe -= 1.0f;
+                }
 
-            if (!tc_world_update(&world, center_chunk_x, center_chunk_z)) {
-                tc_log_error("chunk streaming failed");
-                running = 0;
-            } else {
-                tc_log_info("streaming to chunk (%d, %d): terrain queued "
-                            "in %.2f ms",
-                            center_chunk_x, center_chunk_z,
-                            (tc_time_now() - stream_start) * 1000.0);
+                input.jump = tc_window_key_down(&window, TC_KEY_SPACE);
+                input.sprint = tc_window_key_down(&window, TC_KEY_CTRL);
+
+                for (int index = 0; index < HOTBAR_COUNT; index++) {
+                    if (tc_window_key_pressed(&window,
+                                              (tc_key)(TC_KEY_1 + index))) {
+                        if (selected_hotbar != index) {
+                            selected_hotbar = index;
+                            tc_log_info("selected block: %s",
+                                        hotbar[index].name);
+                        }
+                    }
+                }
+            }
+
+            tc_player_update(&player, &world, &input, (float)dt);
+
+            if (player.position[1] < -32.0f) {
+                float position[3] = {spawn_x, 40.0f, spawn_z};
+
+                tc_log_info("player fell out of the world, respawning");
+                tc_player_init(&player, position, 0.0f, -0.12f);
+            }
+
+            center_chunk_x = tc_math_floor_div((int)floorf(player.position[0]),
+                                               TC_CHUNK_SIZE_X);
+            center_chunk_z = tc_math_floor_div((int)floorf(player.position[2]),
+                                               TC_CHUNK_SIZE_Z);
+
+            if (center_chunk_x != world.center_chunk_x
+                || center_chunk_z != world.center_chunk_z) {
+                double stream_start = tc_time_now();
+
+                if (!tc_world_update(&world, center_chunk_x, center_chunk_z)) {
+                    tc_log_error("chunk streaming failed");
+                    running = 0;
+                } else {
+                    tc_log_info("streaming to chunk (%d, %d): terrain queued "
+                                "in %.2f ms",
+                                center_chunk_x, center_chunk_z,
+                                (tc_time_now() - stream_start) * 1000.0);
+                }
             }
         }
 
         tc_player_get_eye(&player, eye);
         tc_player_get_forward(&player, forward);
 
-        if (!options.benchmark && captured && captured_before) {
+        if (state == APP_STATE_PLAYING && !options.benchmark && captured
+            && captured_before) {
             int break_clicked = tc_window_mouse_pressed(&window,
                                                         TC_MOUSE_LEFT);
             int place_clicked = tc_window_mouse_pressed(&window,
@@ -844,7 +1290,7 @@ int tc_app_run(int argc, char **argv) {
             }
         }
 
-        {
+        if (state == APP_STATE_PLAYING) {
             tc_mesh_stats remesh_stats;
             size_t remesh_count = 0;
             size_t remesh_pending = 0;
@@ -910,11 +1356,29 @@ int tc_app_run(int argc, char **argv) {
                                   &render_meshes[draw_order[index]]);
         }
         tc_renderer_end_frame(&renderer);
-        tc_hud_draw_hotbar(framebuffer_width, framebuffer_height,
-                           hud_swatches, HOTBAR_COUNT, selected_hotbar);
-        if (captured) {
-            tc_hud_draw_crosshair(framebuffer_width, framebuffer_height);
+
+        if (state == APP_STATE_PLAYING) {
+            tc_hud_draw_hotbar(framebuffer_width, framebuffer_height,
+                               hud_swatches, HOTBAR_COUNT, selected_hotbar);
+            if (captured) {
+                tc_hud_draw_crosshair(framebuffer_width, framebuffer_height);
+            }
+        } else {
+            app_menu_get(state, main_menu_has_continue, &menu_items,
+                         &menu_count);
+            if (menu_selection >= menu_count) {
+                menu_selection = menu_count - 1;
+            }
+            if (menu_selection < 0) {
+                menu_selection = 0;
+            }
+
+            draw_menu(&text, framebuffer_width, framebuffer_height, menu_items,
+                      menu_count, menu_selection,
+                      state == APP_STATE_PAUSED ? "PAUSED" : "THINKCRAFT",
+                      &status, now, state == APP_STATE_PAUSED);
         }
+
         tc_window_swap(&window);
 
         frames_since_report++;
@@ -924,12 +1388,14 @@ int tc_app_run(int argc, char **argv) {
         elapsed = now - last_fps_time;
         if (elapsed >= 1.0) {
             double fps = (double)frames_since_report / elapsed;
+            const char *mode = state == APP_STATE_MENU ? "menu"
+                             : state == APP_STATE_PAUSED ? "paused"
+                             : hotbar[selected_hotbar].name;
 
             snprintf(title, sizeof(title),
                      "ThinkCraft | chunk (%d, %d) | %s | %.1f FPS | %dx%d",
-                     world.center_chunk_x, world.center_chunk_z,
-                     hotbar[selected_hotbar].name, fps, framebuffer_width,
-                     framebuffer_height);
+                     world.center_chunk_x, world.center_chunk_z, mode, fps,
+                     framebuffer_width, framebuffer_height);
             tc_window_set_title(&window, title);
             tc_log_info("%.1f FPS, %zu visible chunks", fps, visible_chunks);
             frames_since_report = 0;
@@ -999,6 +1465,9 @@ cleanup:
         for (size_t index = 0; index < slot_count; index++) {
             tc_renderer_destroy_mesh(&render_meshes[index]);
         }
+    }
+    if (text_initialized) {
+        tc_text_shutdown(&text);
     }
     if (renderer_initialized) {
         tc_renderer_shutdown(&renderer);

@@ -63,6 +63,19 @@ void tc_hud_draw_hotbar(int framebuffer_width, int framebuffer_height,
     glEnable(GL_DEPTH_TEST);
 }
 
+void tc_hud_draw_rect(int x, int y, int width, int height,
+                      float red, float green, float blue) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_SCISSOR_TEST);
+    fill_rect(x, y, width, height, red, green, blue);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_DEPTH_TEST);
+}
+
 void tc_hud_draw_crosshair(int framebuffer_width, int framebuffer_height) {
     int center_x;
     int center_y;

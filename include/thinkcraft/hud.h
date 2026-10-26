@@ -9,5 +9,7 @@ void tc_hud_draw_hotbar(int framebuffer_width, int framebuffer_height,
                         const tc_hud_swatch *swatches, int count,
                         int selected);
 void tc_hud_draw_crosshair(int framebuffer_width, int framebuffer_height);
+void tc_hud_draw_rect(int x, int y, int width, int height,
+                      float red, float green, float blue);
 
 #endif

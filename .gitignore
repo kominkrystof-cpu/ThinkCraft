@@ -18,3 +18,4 @@ assets/local/*
 *.swo
 *~
 .DS_Store
+saves/
