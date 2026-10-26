@@ -23,6 +23,31 @@ static void normalize3(float value[3]) {
     }
 }
 
+int tc_math_floor_div(int value, int divisor) {
+    int quotient;
+    int remainder;
+
+    if (divisor == 0) {
+        return 0;
+    }
+
+    quotient = value / divisor;
+    remainder = value % divisor;
+    if (remainder != 0 && ((remainder < 0) != (divisor < 0))) {
+        quotient--;
+    }
+
+    return quotient;
+}
+
+int tc_math_floor_mod(int value, int divisor) {
+    if (divisor == 0) {
+        return 0;
+    }
+
+    return value - tc_math_floor_div(value, divisor) * divisor;
+}
+
 void tc_mat4_identity(float *out) {
     memset(out, 0, sizeof(float) * 16);
     out[0] = 1.0f;

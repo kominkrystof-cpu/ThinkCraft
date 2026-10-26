@@ -17,6 +17,10 @@ typedef struct {
     tc_shader shader;
     int u_mvp;
     int u_texture;
+    int u_camera_pos;
+    int u_fog_color;
+    int u_fog_start;
+    int u_fog_end;
 } tc_renderer;
 
 int tc_renderer_init(tc_renderer *renderer, tc_arena *arena, const char *shader_dir);

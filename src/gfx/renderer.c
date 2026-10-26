@@ -61,7 +61,16 @@ int tc_renderer_init(tc_renderer *renderer, tc_arena *arena,
 
     renderer->u_mvp = tc_shader_uniform(&renderer->shader, "u_mvp");
     renderer->u_texture = tc_shader_uniform(&renderer->shader, "u_texture");
-    if (renderer->u_mvp < 0 || renderer->u_texture < 0) {
+    renderer->u_camera_pos = tc_shader_uniform(&renderer->shader,
+                                               "u_camera_pos");
+    renderer->u_fog_color = tc_shader_uniform(&renderer->shader,
+                                              "u_fog_color");
+    renderer->u_fog_start = tc_shader_uniform(&renderer->shader,
+                                              "u_fog_start");
+    renderer->u_fog_end = tc_shader_uniform(&renderer->shader, "u_fog_end");
+    if (renderer->u_mvp < 0 || renderer->u_texture < 0
+        || renderer->u_camera_pos < 0 || renderer->u_fog_color < 0
+        || renderer->u_fog_start < 0 || renderer->u_fog_end < 0) {
         tc_log_error("shader is missing required uniforms");
         tc_renderer_shutdown(renderer);
         return 0;
@@ -144,6 +153,7 @@ void tc_renderer_destroy_mesh(tc_render_mesh *mesh) {
 void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
                              const float target[3], int framebuffer_width,
                              int framebuffer_height) {
+    const float sky_color[3] = {0.50f, 0.68f, 0.92f};
     float projection[16];
     float view[16];
     float mvp[16];
@@ -157,17 +167,21 @@ void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
     }
 
     glViewport(0, 0, framebuffer_width, framebuffer_height);
-    glClearColor(0.055f, 0.065f, 0.085f, 1.0f);
+    glClearColor(sky_color[0], sky_color[1], sky_color[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     aspect = (float)framebuffer_width / (float)framebuffer_height;
     tc_mat4_perspective(projection, 60.0f * pi / 180.0f, aspect,
-                        0.1f, 1024.0f);
+                        0.1f, 256.0f);
     tc_mat4_look_at(view, eye, target, up);
     tc_mat4_mul(mvp, projection, view);
 
     tc_shader_bind(&renderer->shader);
     glUniformMatrix4fv(renderer->u_mvp, 1, GL_FALSE, mvp);
+    glUniform3fv(renderer->u_camera_pos, 1, eye);
+    glUniform3fv(renderer->u_fog_color, 1, sky_color);
+    glUniform1f(renderer->u_fog_start, 34.0f);
+    glUniform1f(renderer->u_fog_end, 56.0f);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, renderer->texture);

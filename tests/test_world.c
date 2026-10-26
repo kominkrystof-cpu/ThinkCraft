@@ -56,6 +56,18 @@ static int validate_mesh(const tc_mesh *mesh, const tc_chunk *chunk,
     return 1;
 }
 
+static size_t loaded_slots(const tc_world *world) {
+    size_t count = 0;
+
+    for (int index = 0; index < world->size * world->size; index++) {
+        if (world->slots[index].loaded) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
 static int test_world_access(void) {
     tc_arena arena;
     tc_world world;
@@ -66,19 +78,22 @@ static int test_world_access(void) {
         return 0;
     }
 
-    if (!tc_world_init(&world, &arena, 2, 2)) {
+    if (!tc_world_init(&world, &arena, 1)) {
         tc_arena_shutdown(&arena);
         return 0;
     }
 
     chunk = tc_world_chunk_at(&world, 1, 1);
-    ok = ok && check(world.chunks_x == 2 && world.chunks_z == 2,
+    ok = ok && check(world.radius == 1 && world.size == 3,
                      "wrong world dimensions")
+      && check(loaded_slots(&world) == 9, "wrong loaded chunk count")
       && check(chunk != NULL, "missing chunk")
       && check(chunk->origin_x == 16 && chunk->origin_y == 0
                && chunk->origin_z == 16, "wrong chunk origin")
-      && check(tc_world_chunk_at(&world, -1, 0) == NULL,
-               "negative chunk index accepted")
+      && check(tc_world_chunk_at(&world, -1, -1) != NULL,
+               "negative chunk index rejected")
+      && check(tc_world_chunk_at(&world, -2, 0) == NULL,
+               "out-of-range negative chunk index accepted")
       && check(tc_world_chunk_at(&world, 2, 0) == NULL,
                "out-of-range chunk index accepted")
       && check(tc_world_set_block(&world, 17, 4, 18, TC_BLOCK_STONE),
@@ -86,17 +101,68 @@ static int test_world_access(void) {
       && check(tc_world_get_block(&world, 17, 4, 18) == TC_BLOCK_STONE,
                "world get failed")
       && check(chunk->solid_count == 1, "chunk solid count not updated")
+      && check(tc_world_set_block(&world, -1, 4, -1, TC_BLOCK_STONE),
+               "negative world set failed")
+      && check(tc_world_get_block(&world, -1, 4, -1) == TC_BLOCK_STONE,
+               "negative world get failed")
+      && check(tc_world_chunk_at(&world, -1, -1)->solid_count == 1,
+               "negative chunk solid count not updated")
       && check(tc_world_set_block(&world, 17, 4, 18, TC_BLOCK_AIR),
                "world clear failed")
       && check(chunk->solid_count == 0, "chunk solid count not cleared")
-      && check(tc_world_set_block(&world, 32, 4, 0, TC_BLOCK_STONE) == 0,
+      && check(tc_world_set_block(&world, 48, 4, 0, TC_BLOCK_STONE) == 0,
                "out-of-range world set accepted")
-      && check(tc_world_get_block(&world, 32, 4, 0) == TC_BLOCK_AIR,
+      && check(tc_world_get_block(&world, 48, 4, 0) == TC_BLOCK_AIR,
                "out-of-range world get was not air")
-      && check(tc_world_get_block(&world, -1, 4, 0) == TC_BLOCK_AIR,
-               "negative world get was not air")
+      && check(tc_world_get_block(&world, -32, 4, 0) == TC_BLOCK_AIR,
+               "far negative world get was not air")
       && check(tc_world_get_block(&world, 0, 256, 0) == TC_BLOCK_AIR,
                "high world get was not air");
+
+    tc_world_shutdown(&world);
+    tc_arena_shutdown(&arena);
+    return ok;
+}
+
+static int test_streaming_update(void) {
+    tc_arena arena;
+    tc_world world;
+    int ok = 1;
+
+    if (!tc_arena_init(&arena, 2 * 1024 * 1024)) {
+        return 0;
+    }
+
+    if (!tc_world_init(&world, &arena, 1)) {
+        tc_arena_shutdown(&arena);
+        return 0;
+    }
+
+    ok = ok && check(tc_world_update(&world, 2, 0), "world update failed")
+      && check(world.center_chunk_x == 2 && world.center_chunk_z == 0,
+               "world center not updated")
+      && check(tc_world_chunk_at(&world, -1, 0) == NULL,
+               "unloaded chunk still accessible")
+      && check(tc_world_chunk_at(&world, 0, 0) == NULL,
+               "old edge chunk still accessible")
+      && check(tc_world_chunk_at(&world, 1, 0) != NULL,
+               "retained chunk missing")
+      && check(tc_world_chunk_at(&world, 3, 0) != NULL,
+               "new chunk missing")
+      && check(tc_world_chunk_at(&world, 3, 0)->origin_x == 48,
+               "new chunk origin wrong")
+      && check(loaded_slots(&world) == 9, "wrong streamed chunk count")
+      && check(tc_world_get_block(&world, -1, 4, 0) == TC_BLOCK_AIR,
+               "unloaded block was accessible")
+      && check(tc_world_update(&world, -2, -2),
+               "negative world update failed")
+      && check(tc_world_chunk_at(&world, -3, -3) != NULL,
+               "negative edge chunk missing")
+      && check(tc_world_chunk_at(&world, -3, -3)->origin_x == -48
+               && tc_world_chunk_at(&world, -3, -3)->origin_z == -48,
+               "negative chunk origin wrong")
+      && check(loaded_slots(&world) == 9,
+               "wrong negative streamed chunk count");
 
     tc_world_shutdown(&world);
     tc_arena_shutdown(&arena);
@@ -116,7 +182,7 @@ static int test_boundary_mesh(void) {
         return 0;
     }
 
-    if (!tc_world_init(&world, &arena, 2, 1)) {
+    if (!tc_world_init(&world, &arena, 1)) {
         tc_arena_shutdown(&arena);
         return 0;
     }
@@ -172,6 +238,7 @@ static int test_generated_world(void) {
     tc_mesh mesh;
     tc_mesh_stats stats;
     const tc_chunk *center;
+    uint8_t saved_block;
     size_t total_solid = 0;
     int ok = 1;
 
@@ -179,25 +246,26 @@ static int test_generated_world(void) {
         return 0;
     }
 
-    if (!tc_world_init(&world, &arena, 3, 3)) {
+    if (!tc_world_init(&world, &arena, 1)) {
         tc_arena_shutdown(&arena);
         return 0;
     }
 
     tc_world_generate_demo(&world);
 
-    for (int chunk_z = 0; chunk_z < world.chunks_z; chunk_z++) {
-        for (int chunk_x = 0; chunk_x < world.chunks_x; chunk_x++) {
-            const tc_chunk *chunk = tc_world_chunk_at(&world, chunk_x,
-                                                      chunk_z);
-            uint32_t counted = tc_chunk_count_solid(chunk->blocks,
-                                                    TC_CHUNK_BLOCK_COUNT);
+    for (int index = 0; index < world.size * world.size; index++) {
+        const tc_chunk *chunk = &world.slots[index].chunk;
+        uint32_t counted;
 
-            ok = ok && check(chunk->solid_count > 0, "empty generated chunk");
-            ok = ok && check(chunk->solid_count == counted,
-                             "generated solid count mismatch");
-            total_solid += chunk->solid_count;
+        if (!world.slots[index].loaded) {
+            continue;
         }
+
+        counted = tc_chunk_count_solid(chunk->blocks, TC_CHUNK_BLOCK_COUNT);
+        ok = ok && check(chunk->solid_count > 0, "empty generated chunk");
+        ok = ok && check(chunk->solid_count == counted,
+                         "generated solid count mismatch");
+        total_solid += chunk->solid_count;
     }
 
     ok = ok && check(total_solid > 0, "generated world is empty")
@@ -206,9 +274,9 @@ static int test_generated_world(void) {
       && check(tc_world_get_block(&world, 0, 255, 0) == TC_BLOCK_AIR,
                "generated world exceeds height limit");
 
-    center = tc_world_chunk_at(&world, 1, 1);
+    center = tc_world_chunk_at(&world, 0, 0);
     tc_mesh_init(&mesh);
-    ok = ok && check(tc_world_build_chunk_mesh(&world, 1, 1, &mesh, &stats),
+    ok = ok && check(tc_world_build_chunk_mesh(&world, 0, 0, &mesh, &stats),
                      "generated mesh build failed");
     ok = ok && check(stats.solid_blocks == center->solid_count,
                      "generated chunk solid count mismatch")
@@ -216,6 +284,18 @@ static int test_generated_world(void) {
       && check(stats.visible_faces > stats.quads,
                "generated chunk was not greedily merged")
       && validate_mesh(&mesh, center, stats.quads);
+
+    saved_block = tc_world_get_block(&world, 8, 5, 8);
+    ok = ok && check(saved_block != TC_BLOCK_AIR,
+                     "saved generated block is air")
+      && check(tc_world_update(&world, 20, 20), "far generation update failed")
+      && check(tc_world_get_block(&world, 8, 5, 8) == TC_BLOCK_AIR,
+               "far chunk was not unloaded")
+      && check(tc_world_get_block(&world, 320, 5, 320) != TC_BLOCK_AIR,
+               "far generated chunk is empty")
+      && check(tc_world_update(&world, 0, 0), "return update failed")
+      && check(tc_world_get_block(&world, 8, 5, 8) == saved_block,
+               "generated terrain was not deterministic");
 
     printf("generated world: 3x3 chunks, %zu solid blocks, "
            "center chunk %zu faces -> %zu quads\n",
@@ -231,6 +311,7 @@ int main(void) {
     int ok = 1;
 
     ok = ok && test_world_access();
+    ok = ok && test_streaming_update();
     ok = ok && test_boundary_mesh();
     ok = ok && test_generated_world();
 

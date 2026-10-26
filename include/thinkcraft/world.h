@@ -5,17 +5,29 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 
-#define TC_WORLD_DEFAULT_CHUNKS_X 5
-#define TC_WORLD_DEFAULT_CHUNKS_Z 5
+#define TC_WORLD_DEFAULT_RADIUS 3
+#define TC_WORLD_DEFAULT_SIZE (TC_WORLD_DEFAULT_RADIUS * 2 + 1)
 
 typedef struct {
-    int chunks_x;
-    int chunks_z;
-    tc_chunk *chunks;
+    tc_chunk chunk;
+    int chunk_x;
+    int chunk_z;
+    int loaded;
+    int dirty;
+} tc_world_slot;
+
+typedef struct {
+    int radius;
+    int size;
+    int center_chunk_x;
+    int center_chunk_z;
+    int generate_demo;
+    tc_world_slot *slots;
 } tc_world;
 
-int tc_world_init(tc_world *world, tc_arena *arena, int chunks_x, int chunks_z);
+int tc_world_init(tc_world *world, tc_arena *arena, int radius);
 void tc_world_shutdown(tc_world *world);
+int tc_world_update(tc_world *world, int center_chunk_x, int center_chunk_z);
 void tc_world_generate_demo(tc_world *world);
 tc_chunk *tc_world_chunk_at(const tc_world *world, int chunk_x, int chunk_z);
 uint8_t tc_world_get_block(const tc_world *world, int x, int y, int z);

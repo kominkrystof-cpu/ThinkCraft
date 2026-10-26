@@ -34,6 +34,7 @@ ENGINE_BIN := $(BUILD)/engine/thinkcraft
 TEST_MATH  := $(BUILD)/tests/test_math
 TEST_CHUNK := $(BUILD)/tests/test_chunk_mesh
 TEST_WORLD := $(BUILD)/tests/test_world
+TEST_PLAYER := $(BUILD)/tests/test_player
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -46,6 +47,7 @@ ENGINE_C_SRCS := \
 	src/gfx/shader.c \
 	src/gfx/window.c \
 	src/math/mat4.c \
+	src/player/player.c \
 	src/world/chunk.c \
 	src/world/chunk_mesh.c \
 	src/world/world.c \
@@ -81,6 +83,22 @@ TEST_WORLD_OBJS := \
 	$(BUILD)/tests/obj/src/core/arena.o \
 	$(BUILD)/tests/obj/src/core/log.o \
 	$(BUILD)/tests/obj/src/core/platform.o \
+	$(BUILD)/tests/obj/src/math/mat4.o \
+	$(BUILD)/tests/obj/src/asm/mat4_mul.o \
+	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
+
+TEST_PLAYER_OBJS := \
+	$(BUILD)/tests/obj/tests/test_player.o \
+	$(BUILD)/tests/obj/src/player/player.o \
+	$(BUILD)/tests/obj/src/world/world.o \
+	$(BUILD)/tests/obj/src/world/chunk.o \
+	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/gfx/mesh.o \
+	$(BUILD)/tests/obj/src/core/arena.o \
+	$(BUILD)/tests/obj/src/core/log.o \
+	$(BUILD)/tests/obj/src/core/platform.o \
+	$(BUILD)/tests/obj/src/math/mat4.o \
+	$(BUILD)/tests/obj/src/asm/mat4_mul.o \
 	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
 
 all: engine
@@ -111,6 +129,10 @@ $(TEST_WORLD): $(TEST_WORLD_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_PLAYER): $(TEST_PLAYER_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -127,7 +149,7 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math test-chunk-mesh test-world
+test: test-math test-chunk-mesh test-world test-player
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
@@ -138,7 +160,10 @@ test-chunk-mesh: $(TEST_CHUNK)
 test-world: $(TEST_WORLD)
 	./$(TEST_WORLD)
 
-test-all: test-math test-chunk-mesh test-world test-transpiler
+test-player: $(TEST_PLAYER)
+	./$(TEST_PLAYER)
+
+test-all: test-math test-chunk-mesh test-world test-player test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -156,6 +181,6 @@ clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-transpiler transpiler run benchmark clean

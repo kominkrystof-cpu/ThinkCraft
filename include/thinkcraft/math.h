@@ -1,6 +1,8 @@
 #ifndef THINKCRAFT_MATH_H
 #define THINKCRAFT_MATH_H
 
+int tc_math_floor_div(int value, int divisor);
+int tc_math_floor_mod(int value, int divisor);
 void tc_mat4_identity(float *out);
 void tc_mat4_perspective(float *out, float fov_y_radians, float aspect,
                          float near_plane, float far_plane);

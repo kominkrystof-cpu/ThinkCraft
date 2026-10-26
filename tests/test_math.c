@@ -143,6 +143,20 @@ static int test_look_at(void) {
     return 1;
 }
 
+static int test_floor_division(void) {
+    if (tc_math_floor_div(17, 16) != 1
+        || tc_math_floor_div(-1, 16) != -1
+        || tc_math_floor_div(-17, 16) != -2
+        || tc_math_floor_mod(-1, 16) != 15
+        || tc_math_floor_mod(-17, 16) != 15
+        || tc_math_floor_mod(17, 16) != 1) {
+        fprintf(stderr, "floor division: negative coordinate mapping failed\n");
+        return 0;
+    }
+
+    return 1;
+}
+
 static int test_perspective(void) {
     float matrix[16];
     float fov = 1.0471975512f;
@@ -175,6 +189,7 @@ int main(void) {
         || !test_general_multiplication()
         || !test_transform_composition()
         || !test_look_at()
+        || !test_floor_division()
         || !test_perspective()) {
         return 1;
     }
