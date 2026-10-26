@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation, not a playable Minecraft clone. The first milestone renders a spinning textured cube, reports frame rate, and runs an automated benchmark.
+The project is currently an engine foundation, not a playable Minecraft clone. The current milestone generates a 16x256x16 voxel chunk, reduces its visible geometry with greedy meshing, and renders it from an orbiting camera.
 
 ## Status
 
@@ -13,7 +13,7 @@ The project is currently an engine foundation, not a playable Minecraft clone. T
 - Target hardware: Intel UHD 620 / i3-10110U-class laptops
 - Target: stable 100 FPS at 1280x720
 
-The initial cube benchmark has been verified on the development Intel UHD 620 machine at well above the 100 FPS target with vsync disabled. That result measures a single cube, not a full world, and should not be treated as a final world-rendering benchmark.
+The current single-chunk benchmark runs at roughly 1,400-1,700 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. That result measures one simple chunk, not a streamed world, and should not be treated as a final world-rendering benchmark.
 
 ## Current Milestone
 
@@ -22,13 +22,19 @@ The initial cube benchmark has been verified on the development Intel UHD 620 ma
 - Glad-generated OpenGL loader
 - Shader loading and compilation with error reporting
 - Depth testing and back-face culling
-- Textured, rotating cube using a procedural 16x16 checker texture
+- 16x256x16 chunk storage with inline bounds-checked block access
+- Deterministic demo terrain with grass, dirt, stone, and sand
+- Greedy meshing across all three axes with internal-face culling
+- Demo chunk reduced from 1,750 visible faces to 415 quads (4.22x)
+- Vertex-colored chunk mesh uploaded to a VBO and EBO
+- Orbiting camera around the first chunk
 - Arena allocator for startup allocations
-- 4x4 matrix math in C
+- 4x4 matrix math in C, including `look_at`
 - `tc_mat4_mul` implemented in x86-64 NASM
+- `tc_chunk_count_solid` implemented in x86-64 NASM
 - Frame-time and FPS reporting
-- Automated benchmark mode
-- Unit test comparing the NASM matrix multiply against a scalar reference
+- Automated render benchmark and mesh benchmark output
+- Chunk/mesh tests covering greedy merge cases, index bounds, reduction, and repeated build performance
 
 ## Requirements
 
@@ -91,6 +97,8 @@ Controls:
 Escape    close the window
 ```
 
+The first chunk is static. The camera slowly orbits around it. At startup the engine prints the solid block count, visible face count, greedy quad count, reduction factor, and mesh build time.
+
 Command-line options:
 
 ```text
@@ -131,9 +139,18 @@ The benchmark prints the elapsed time, total frames, average FPS, and average mi
 make test
 ```
 
-`make test` runs the portable math test suite. It compares the NASM matrix multiplication against a scalar C reference and checks perspective projection values.
+`make test` runs the portable math and chunk-mesh test suites.
 
-To run both the math tests and the optional transpiler test:
+Individual test targets:
+
+```sh
+make test-math
+make test-chunk-mesh
+```
+
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective and view matrices. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark.
+
+To run the math tests, chunk tests, and the optional transpiler test:
 
 ```sh
 make test-all
@@ -154,8 +171,9 @@ include/thinkcraft/     Public engine headers
 src/main.c              Entry point
 src/app.c               Application loop and command-line handling
 src/core/               Arena allocator, logging, platform helpers
-src/gfx/                Window, shader, and renderer code
+src/gfx/                Window, shader, mesh, and renderer code
 src/math/               Matrix math in C
+src/world/              Chunk storage, demo terrain, and greedy meshing
 src/asm/                NASM hot paths
 shaders/                GLSL shaders
 third_party/glad/       Vendored Glad 3.3 core loader
@@ -181,18 +199,17 @@ scripts/                Development helper scripts
 
 ## Performance Notes
 
-The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. Important planned work includes:
+The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current chunk path uses a flat `uint8_t` block array, an inline index, a three-axis greedy mask, and a single indexed draw call. Important planned work includes:
 
-- Chunk storage with cache-friendly block arrays
-- Greedy meshing to reduce triangle counts
-- Texture atlases to reduce draw calls and state changes
+- Neighbor-aware chunk boundaries and multiple loaded chunks
+- Texture atlases to replace vertex colors
 - Frustum culling
 - Chunk visibility scheduling
 - Multithreaded mesh generation
 - Avoiding per-frame allocation and unnecessary copying
 - Native assembly paths only for verified hotspots
 
-The current cube benchmark is intentionally simple. It validates the window, OpenGL context, shader pipeline, buffer setup, texture path, and matrix code before world rendering is added.
+The current chunk benchmark is intentionally small. It validates chunk storage, the greedy mesher, mesh upload, shader attributes, camera math, and the draw path before world streaming is added. The included demo chunk has 3,530 solid blocks; mesh building takes roughly 0.2-0.3 ms on the development machine after warmup.
 
 ## Optional Transpiler Experiment
 
@@ -227,10 +244,12 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] First OpenGL window and rotating textured cube
 - [x] Shader loader, arena allocator, and NASM matrix multiply
 - [x] FPS reporting and benchmark mode
-- [ ] Chunk storage and block registry
-- [ ] Chunk meshing
-- [ ] Greedy meshing
-- [ ] Texture atlas and block rendering
+- [x] Chunk storage and block registry
+- [x] Chunk meshing
+- [x] Greedy meshing
+- [x] Vertex-colored first chunk rendering
+- [ ] Texture atlas and textured blocks
+- [ ] Multiple chunks and neighbor-aware meshing
 - [ ] Player controller and collision
 - [ ] World generation
 - [ ] Save and load format

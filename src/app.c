@@ -1,6 +1,9 @@
 #include "thinkcraft/app.h"
 #include "thinkcraft/arena.h"
+#include "thinkcraft/chunk.h"
+#include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/log.h"
+#include "thinkcraft/mesh.h"
 #include "thinkcraft/platform.h"
 #include "thinkcraft/renderer.h"
 #include "thinkcraft/window.h"
@@ -137,6 +140,9 @@ static int resolve_shader_dir(char *buffer, size_t size) {
 
 int tc_app_run(int argc, char **argv) {
     tc_arena arena;
+    tc_chunk *chunk;
+    tc_mesh mesh;
+    tc_mesh_stats mesh_stats;
     tc_window window;
     tc_renderer renderer;
     app_options options;
@@ -147,6 +153,7 @@ int tc_app_run(int argc, char **argv) {
     double elapsed;
     double total_elapsed = 0.0;
     double average_fps = 0.0;
+    double mesh_reduction = 0.0;
     long long total_frames = 0;
     int frames_since_report = 0;
     int running = 1;
@@ -164,9 +171,43 @@ int tc_app_run(int argc, char **argv) {
         return 1;
     }
 
+    chunk = tc_arena_alloc(&arena, sizeof(*chunk));
+    if (chunk == NULL) {
+        tc_log_error("failed to allocate chunk");
+        tc_arena_shutdown(&arena);
+        return 1;
+    }
+
+    tc_chunk_init(chunk, 0, 0, 0);
+    tc_chunk_generate_demo(chunk);
+
+    tc_mesh_init(&mesh);
+    if (!tc_chunk_build_mesh(chunk, &mesh, &mesh_stats)) {
+        tc_log_error("greedy meshing failed");
+        tc_mesh_shutdown(&mesh);
+        tc_arena_shutdown(&arena);
+        return 1;
+    }
+
+    if (mesh_stats.quads > 0) {
+        mesh_reduction = (double)mesh_stats.visible_faces
+                       / (double)mesh_stats.quads;
+    }
+
+    tc_log_info("chunk %dx%dx%d: %zu solid blocks",
+                TC_CHUNK_SIZE_X, TC_CHUNK_SIZE_Y, TC_CHUNK_SIZE_Z,
+                mesh_stats.solid_blocks);
+    tc_log_info("greedy mesh: %zu visible faces -> %zu quads (%.2fx), "
+                "%zu vertices, %zu indices",
+                mesh_stats.visible_faces, mesh_stats.quads, mesh_reduction,
+                mesh_stats.vertices, mesh_stats.indices);
+    tc_log_info("mesh build: %.3f ms (visibility scan %.3f ms)",
+                mesh_stats.build_ms, mesh_stats.scan_ms);
+
     if (!resolve_shader_dir(shader_dir, sizeof(shader_dir))) {
         tc_log_error("could not locate shaders/basic.vert");
         tc_log_error("run ThinkCraft from the repository or install the shaders directory beside the binary");
+        tc_mesh_shutdown(&mesh);
         tc_arena_shutdown(&arena);
         return 1;
     }
@@ -176,6 +217,7 @@ int tc_app_run(int argc, char **argv) {
 
     if (!tc_window_create(&window, options.width, options.height, options.vsync,
                           "ThinkCraft")) {
+        tc_mesh_shutdown(&mesh);
         tc_arena_shutdown(&arena);
         return 1;
     }
@@ -183,9 +225,21 @@ int tc_app_run(int argc, char **argv) {
     if (!tc_renderer_init(&renderer, &arena, shader_dir)) {
         tc_log_error("renderer initialization failed");
         tc_window_destroy(&window);
+        tc_mesh_shutdown(&mesh);
         tc_arena_shutdown(&arena);
         return 1;
     }
+
+    if (!tc_renderer_upload_mesh(&renderer, &mesh)) {
+        tc_log_error("failed to upload chunk mesh to OpenGL");
+        tc_renderer_shutdown(&renderer);
+        tc_window_destroy(&window);
+        tc_mesh_shutdown(&mesh);
+        tc_arena_shutdown(&arena);
+        return 1;
+    }
+
+    tc_mesh_shutdown(&mesh);
 
     start_time = tc_window_time();
     last_fps_time = start_time;
@@ -234,12 +288,17 @@ int tc_app_run(int argc, char **argv) {
         average_fps = (double)total_frames / total_elapsed;
     }
 
-    tc_log_info("benchmark: %.2f s, %lld frames, %.1f FPS average, %.3f ms/frame",
-                total_elapsed, total_frames, average_fps,
-                total_frames > 0 ? (total_elapsed * 1000.0 / (double)total_frames) : 0.0);
-
     if (options.benchmark) {
+        tc_log_info("benchmark: %.2f s, %lld frames, %.1f FPS average, "
+                    "%.3f ms/frame",
+                    total_elapsed, total_frames, average_fps,
+                    total_frames > 0
+                        ? (total_elapsed * 1000.0 / (double)total_frames)
+                        : 0.0);
         tc_log_info("benchmark complete");
+    } else {
+        tc_log_info("session: %.2f s, %lld frames, %.1f FPS average",
+                    total_elapsed, total_frames, average_fps);
     }
 
     tc_renderer_shutdown(&renderer);

@@ -32,6 +32,7 @@ LDLIBS     := $(GLFW_LIBS) -lm -ldl
 
 ENGINE_BIN := $(BUILD)/engine/thinkcraft
 TEST_MATH  := $(BUILD)/tests/test_math
+TEST_CHUNK := $(BUILD)/tests/test_chunk_mesh
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -39,13 +40,16 @@ ENGINE_C_SRCS := \
 	src/core/arena.c \
 	src/core/log.c \
 	src/core/platform.c \
+	src/gfx/mesh.c \
 	src/gfx/renderer.c \
 	src/gfx/shader.c \
 	src/gfx/window.c \
 	src/math/mat4.c \
+	src/world/chunk.c \
+	src/world/chunk_mesh.c \
 	third_party/glad/src/gl.c
 
-ENGINE_ASM_SRCS := src/asm/mat4_mul.asm
+ENGINE_ASM_SRCS := src/asm/mat4_mul.asm src/asm/chunk_count_solid.asm
 
 ENGINE_OBJS := \
 	$(patsubst %.c,$(BUILD)/engine/obj/%.o,$(ENGINE_C_SRCS)) \
@@ -55,6 +59,16 @@ TEST_MATH_OBJS := \
 	$(BUILD)/tests/obj/tests/test_math.o \
 	$(BUILD)/tests/obj/src/math/mat4.o \
 	$(BUILD)/tests/obj/src/asm/mat4_mul.o
+
+TEST_CHUNK_OBJS := \
+	$(BUILD)/tests/obj/tests/test_chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/chunk.o \
+	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/gfx/mesh.o \
+	$(BUILD)/tests/obj/src/core/arena.o \
+	$(BUILD)/tests/obj/src/core/log.o \
+	$(BUILD)/tests/obj/src/core/platform.o \
+	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
 
 all: engine
 
@@ -76,6 +90,10 @@ $(TEST_MATH): $(TEST_MATH_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_CHUNK): $(TEST_CHUNK_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -92,12 +110,15 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math
+test: test-math test-chunk-mesh
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
 
-test-all: test-math test-transpiler
+test-chunk-mesh: $(TEST_CHUNK)
+	./$(TEST_CHUNK)
+
+test-all: test-math test-chunk-mesh test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -115,6 +136,6 @@ clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-transpiler transpiler run benchmark clean

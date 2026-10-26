@@ -10,4 +10,4 @@
 - Do not commit Mojang assets, extracted Minecraft files, purchased texture packs, or assets with unclear licensing.
 - Include the original source and license information for every committed asset.
 - Keep generated textures and temporary files out of `cc0/`.
-- The engine currently uses a procedural checker texture and does not require any external asset files.
+- The engine currently uses a white 1x1 texture with vertex colors and does not require any external asset files.

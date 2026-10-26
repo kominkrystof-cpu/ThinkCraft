@@ -106,6 +106,43 @@ static int test_transform_composition(void) {
     return compare_matrices("view model", projection_view, expected);
 }
 
+static void transform_point(float out[3], const float matrix[16],
+                            const float point[3]) {
+    out[0] = matrix[0] * point[0] + matrix[4] * point[1]
+           + matrix[8] * point[2] + matrix[12];
+    out[1] = matrix[1] * point[0] + matrix[5] * point[1]
+           + matrix[9] * point[2] + matrix[13];
+    out[2] = matrix[2] * point[0] + matrix[6] * point[1]
+           + matrix[10] * point[2] + matrix[14];
+}
+
+static int test_look_at(void) {
+    const float eye[3] = {0.0f, 0.0f, 3.0f};
+    const float center[3] = {0.0f, 0.0f, 0.0f};
+    const float up[3] = {0.0f, 1.0f, 0.0f};
+    float view[16];
+    float transformed_eye[3];
+    float transformed_origin[3];
+
+    tc_mat4_look_at(view, eye, center, up);
+    transform_point(transformed_eye, view, eye);
+    transform_point(transformed_origin, view, center);
+
+    if (fabsf(transformed_eye[0]) > 1e-5f
+        || fabsf(transformed_eye[1]) > 1e-5f
+        || fabsf(transformed_eye[2]) > 1e-5f) {
+        fprintf(stderr, "look_at: camera position did not map to origin\n");
+        return 0;
+    }
+
+    if (fabsf(transformed_origin[2] + 3.0f) > 1e-5f) {
+        fprintf(stderr, "look_at: wrong forward distance\n");
+        return 0;
+    }
+
+    return 1;
+}
+
 static int test_perspective(void) {
     float matrix[16];
     float fov = 1.0471975512f;
@@ -137,6 +174,7 @@ int main(void) {
     if (!test_identity()
         || !test_general_multiplication()
         || !test_transform_composition()
+        || !test_look_at()
         || !test_perspective()) {
         return 1;
     }

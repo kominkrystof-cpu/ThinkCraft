@@ -39,6 +39,8 @@ static GLuint link_program(GLuint vertex, GLuint fragment) {
     glAttachShader(program, vertex);
     glAttachShader(program, fragment);
     glLinkProgram(program);
+    glDetachShader(program, vertex);
+    glDetachShader(program, fragment);
     glGetProgramiv(program, GL_LINK_STATUS, &status);
 
     if (status != GL_TRUE) {
