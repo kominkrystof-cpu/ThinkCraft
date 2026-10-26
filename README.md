@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 7x7 ring of 16x256x16 voxel chunks around the player, generates deterministic terrain, meshes each chunk with neighbor-aware greedy meshing, and renders it with a first-person controller and distance fog.
+The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates deterministic terrain, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, and distance fog.
 
 ## Status
 
@@ -13,7 +13,7 @@ The project is currently an engine foundation with a playable first-person demo,
 - Target hardware: Intel UHD 620 / i3-10110U-class laptops
 - Target: stable 100 FPS at 1280x720
 
-The current streaming-world benchmark runs at roughly 1,200 to 1,500 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. It renders a 7x7 ring around the player, remeshes boundary chunks when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
+The current streaming-world benchmark runs at roughly 1,400 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. It renders a 9x9 ring around the player, remeshes boundary chunks when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
 
 ## Current Milestone
 
@@ -21,16 +21,19 @@ The current streaming-world benchmark runs at roughly 1,200 to 1,500 FPS on the 
 - GLFW window creation, key-state input, mouse capture, and clean shutdown
 - Glad-generated OpenGL loader
 - Shader loading and compilation with error reporting
-- Depth testing, back-face culling, and distance fog
+- Depth testing, back-face culling, and softened distance fog (48 to 80 blocks)
 - 16x256x16 chunk storage with inline bounds-checked block access
-- Dynamic 7x7 chunk streaming ring around the player
+- Dynamic 9x9 chunk streaming ring around the player
 - Deterministic demo terrain independent of streaming history
 - Negative world and chunk coordinates through floor division
 - Automatic load/unload of chunk rows and columns as the player moves
 - Dirty-slot remeshing with neighbor updates across chunk borders
 - Neighbor-aware greedy meshing across all three axes with internal-face culling
-- Initial world reduced from 35,042 visible faces to 4,515 quads (7.76x)
-- 49 per-chunk vertex-colored meshes uploaded to VBOs and EBOs
+- Initial world reduced from 54,386 visible faces to 7,287 quads (7.46x)
+- 81 per-chunk textured meshes uploaded to VBOs and EBOs
+- Procedural 64x64 RGBA texture atlas with a 4x4 grid of 16x16 tiles
+- Textured grass, dirt, stone, and sand with per-face shading
+- Repeating tile-local UVs on greedy-merged quads
 - First-person WASD controller with mouse look and Ctrl sprint
 - Gravity, jumping, AABB voxel collision, one-block auto-step, and surface spawning
 - Procedural stone, grass, dirt, and sand demo terrain
@@ -40,8 +43,9 @@ The current streaming-world benchmark runs at roughly 1,200 to 1,500 FPS on the 
 - `tc_chunk_count_solid` implemented in x86-64 NASM
 - Frame-time and FPS reporting
 - Automated render benchmark and mesh benchmark output
-- Chunk, world, player, and mesh tests covering boundary culling, streaming,
-  generation determinism, negative coordinates, collision, jumping, and look limits
+- Chunk, world, player, texture, and mesh tests covering boundary culling,
+  streaming, generation determinism, negative coordinates, collision, jumping,
+  look limits, and atlas tile data
 
 ## Requirements
 
@@ -151,7 +155,7 @@ The benchmark prints the elapsed time, total frames, average FPS, and average mi
 make test
 ```
 
-`make test` runs the portable math, chunk-mesh, world, and player test suites.
+`make test` runs the portable math, chunk-mesh, world, player, and texture test suites.
 
 Individual test targets:
 
@@ -160,11 +164,12 @@ make test-math
 make test-chunk-mesh
 make test-world
 make test-player
+make test-texture
 ```
 
-The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, surface spawning, pitch clamping, and yaw wrapping.
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, and sand palettes.
 
-To run the math, chunk, world, player, and optional transpiler tests:
+To run the math, chunk, world, player, texture, and optional transpiler tests:
 
 ```sh
 make test-all
@@ -185,7 +190,7 @@ include/thinkcraft/     Public engine headers
 src/main.c              Entry point
 src/app.c               Application loop and command-line handling
 src/core/               Arena allocator, logging, platform helpers
-src/gfx/                Window, shader, mesh, and renderer code
+src/gfx/                Window, shader, mesh, renderer, and texture atlas code
 src/math/               Matrix math in C
 src/player/             First-person movement and voxel collision
 src/world/              Chunk storage, streaming world, demo terrain, and greedy meshing
@@ -214,9 +219,8 @@ scripts/                Development helper scripts
 
 ## Performance Notes
 
-The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, one indexed draw per chunk, and a direct-mapped 7x7 streaming ring. Important planned work includes:
+The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, one indexed draw per chunk, a nearest-filtered procedural atlas, and a direct-mapped 9x9 streaming ring. Important planned work includes:
 
-- Texture atlases to replace vertex colors
 - Frustum culling
 - Chunk visibility scheduling
 - Spreading or offloading boundary remeshing to avoid transition spikes
@@ -224,7 +228,7 @@ The project targets frame times that leave headroom on integrated graphics rathe
 - Avoiding per-frame allocation and unnecessary copying
 - Native assembly paths only for verified hotspots
 
-The current benchmark renders 49 chunks around the player. At startup the streaming ring has 167,983 solid blocks and 35,042 visible faces reduced to 4,515 quads; initial mesh building takes roughly 18 ms total on the development machine after warmup. Crossing a chunk boundary remeshes about 21 chunks, including new edge chunks and their affected neighbors, in roughly 20 to 30 ms. Rendering averages roughly 1,200 to 1,500 FPS at 1280x720.
+The current benchmark renders 81 chunks around the player. At startup the streaming ring has 275,584 solid blocks and 54,386 visible faces reduced to 7,287 quads; initial mesh building takes roughly 33 ms total on the development machine. Crossing a chunk boundary remeshes about 27 chunks, including new edge chunks and their affected neighbors, in roughly 25 to 40 ms. Rendering averages roughly 1,400 FPS at 1280x720.
 
 ## Optional Transpiler Experiment
 
@@ -263,11 +267,11 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] Chunk meshing
 - [x] Greedy meshing
 - [x] Multiple chunks and neighbor-aware meshing
-- [x] Vertex-colored world rendering
+- [x] Per-face block shading
+- [x] Procedural CC0 texture atlas
 - [x] Deterministic demo terrain across a chunk grid
-- [ ] Texture atlas and textured blocks
-- [ ] Dynamic chunk loading and unloading
-- [ ] Player controller and collision
+- [x] Dynamic chunk loading and unloading
+- [x] Player controller and collision
 - [ ] Full world generation and biomes
 - [ ] Save and load format
 - [ ] Frustum culling and chunk scheduling

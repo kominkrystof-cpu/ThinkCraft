@@ -1,5 +1,6 @@
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/platform.h"
+#include "thinkcraft/texture.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -26,38 +27,25 @@ static uint8_t sample_block(const tc_chunk *chunk, tc_block_sampler sampler,
     return tc_chunk_get(chunk, x, y, z);
 }
 
-static void block_face_color(uint8_t block, int axis, int positive,
-                             uint8_t color[4]) {
-    float base[3] = {1.0f, 0.0f, 1.0f};
-    float shade;
-
+static uint8_t block_face_tile(uint8_t block, int axis, int positive) {
     if (block == TC_BLOCK_GRASS) {
-        if (axis == 1 && positive) {
-            base[0] = 0.30f;
-            base[1] = 0.68f;
-            base[2] = 0.22f;
-        } else if (axis == 1) {
-            base[0] = 0.42f;
-            base[1] = 0.30f;
-            base[2] = 0.20f;
-        } else {
-            base[0] = 0.38f;
-            base[1] = 0.54f;
-            base[2] = 0.20f;
+        if (axis == 1) {
+            return positive ? TC_TILE_GRASS_TOP : TC_TILE_DIRT;
         }
-    } else if (block == TC_BLOCK_DIRT) {
-        base[0] = 0.45f;
-        base[1] = 0.31f;
-        base[2] = 0.20f;
-    } else if (block == TC_BLOCK_STONE) {
-        base[0] = 0.56f;
-        base[1] = 0.56f;
-        base[2] = 0.60f;
-    } else if (block == TC_BLOCK_SAND) {
-        base[0] = 0.82f;
-        base[1] = 0.74f;
-        base[2] = 0.46f;
+        return TC_TILE_GRASS_SIDE;
     }
+    if (block == TC_BLOCK_DIRT) {
+        return TC_TILE_DIRT;
+    }
+    if (block == TC_BLOCK_SAND) {
+        return TC_TILE_SAND;
+    }
+    return TC_TILE_STONE;
+}
+
+static void block_face_style(uint8_t block, int axis, int positive,
+                             uint8_t color[3], uint8_t *tile) {
+    float shade;
 
     if (axis == 1) {
         shade = positive ? 1.0f : 0.55f;
@@ -67,10 +55,10 @@ static void block_face_color(uint8_t block, int axis, int positive,
         shade = positive ? 0.74f : 0.64f;
     }
 
-    color[0] = to_byte(base[0] * shade);
-    color[1] = to_byte(base[1] * shade);
-    color[2] = to_byte(base[2] * shade);
-    color[3] = 255;
+    color[0] = to_byte(shade);
+    color[1] = color[0];
+    color[2] = color[0];
+    *tile = block_face_tile(block, axis, positive);
 }
 
 int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
@@ -234,14 +222,30 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                          origin[1] + (float)p[1],
                          origin[2] + (float)p[2]}
                     };
-                    float uvs[4][2] = {
-                        {0.0f, 0.0f},
-                        {(float)w, 0.0f},
-                        {(float)w, (float)h},
-                        {0.0f, (float)h}
-                    };
-                    uint8_t color[4];
+                    float uvs[4][2];
+                    uint8_t color[3];
+                    uint8_t tile;
                     tc_vertex quad[4];
+
+                    if (axis == 0) {
+                        uvs[0][0] = 0.0f;
+                        uvs[0][1] = 0.0f;
+                        uvs[1][0] = 0.0f;
+                        uvs[1][1] = (float)w;
+                        uvs[2][0] = (float)h;
+                        uvs[2][1] = (float)w;
+                        uvs[3][0] = (float)h;
+                        uvs[3][1] = 0.0f;
+                    } else {
+                        uvs[0][0] = 0.0f;
+                        uvs[0][1] = 0.0f;
+                        uvs[1][0] = (float)w;
+                        uvs[1][1] = 0.0f;
+                        uvs[2][0] = (float)w;
+                        uvs[2][1] = (float)h;
+                        uvs[3][0] = 0.0f;
+                        uvs[3][1] = (float)h;
+                    }
 
                     positions[1][u] += (float)w;
                     positions[2][u] += (float)w;
@@ -264,8 +268,8 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                         memcpy(uvs[3], temp_uv, sizeof(temp_uv));
                     }
 
-                    block_face_color((uint8_t)(c > 0 ? c : -c), axis,
-                                     c > 0, color);
+                    block_face_style((uint8_t)(c > 0 ? c : -c), axis,
+                                     c > 0, color, &tile);
 
                     for (int vertex = 0; vertex < 4; vertex++) {
                         memcpy(quad[vertex].position, positions[vertex],
@@ -274,6 +278,7 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                                sizeof(quad[vertex].uv));
                         memcpy(quad[vertex].color, color,
                                sizeof(quad[vertex].color));
+                        quad[vertex].tile = tile;
                     }
 
                     if (!tc_mesh_add_quad(mesh, quad)) {

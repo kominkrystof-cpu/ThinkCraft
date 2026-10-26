@@ -35,6 +35,7 @@ TEST_MATH  := $(BUILD)/tests/test_math
 TEST_CHUNK := $(BUILD)/tests/test_chunk_mesh
 TEST_WORLD := $(BUILD)/tests/test_world
 TEST_PLAYER := $(BUILD)/tests/test_player
+TEST_TEXTURE := $(BUILD)/tests/test_texture
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -45,6 +46,7 @@ ENGINE_C_SRCS := \
 	src/gfx/mesh.c \
 	src/gfx/renderer.c \
 	src/gfx/shader.c \
+	src/gfx/texture.c \
 	src/gfx/window.c \
 	src/math/mat4.c \
 	src/player/player.c \
@@ -101,6 +103,10 @@ TEST_PLAYER_OBJS := \
 	$(BUILD)/tests/obj/src/asm/mat4_mul.o \
 	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
 
+TEST_TEXTURE_OBJS := \
+	$(BUILD)/tests/obj/tests/test_texture.o \
+	$(BUILD)/tests/obj/src/gfx/texture.o
+
 all: engine
 
 engine: check-deps $(ENGINE_BIN)
@@ -133,6 +139,10 @@ $(TEST_PLAYER): $(TEST_PLAYER_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_TEXTURE): $(TEST_TEXTURE_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -149,7 +159,7 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math test-chunk-mesh test-world test-player
+test: test-math test-chunk-mesh test-world test-player test-texture
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
@@ -163,7 +173,10 @@ test-world: $(TEST_WORLD)
 test-player: $(TEST_PLAYER)
 	./$(TEST_PLAYER)
 
-test-all: test-math test-chunk-mesh test-world test-player test-transpiler
+test-texture: $(TEST_TEXTURE)
+	./$(TEST_TEXTURE)
+
+test-all: test-math test-chunk-mesh test-world test-player test-texture test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -181,6 +194,6 @@ clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-transpiler transpiler run benchmark clean

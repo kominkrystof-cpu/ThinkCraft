@@ -1,6 +1,7 @@
 #include "thinkcraft/renderer.h"
 #include "thinkcraft/log.h"
 #include "thinkcraft/math.h"
+#include "thinkcraft/texture.h"
 
 #include <glad/gl.h>
 
@@ -10,18 +11,21 @@
 #include <stdio.h>
 #include <string.h>
 
-static void create_white_texture(unsigned int *texture) {
-    const unsigned char pixel[4] = {255, 255, 255, 255};
+static void create_atlas_texture(unsigned int *texture) {
+    uint8_t pixels[TC_ATLAS_PIXEL_COUNT];
+
+    tc_texture_generate_atlas(pixels);
 
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_2D, *texture);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, TC_ATLAS_SIZE, TC_ATLAS_SIZE, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 }
 
 static void configure_mesh(tc_render_mesh *mesh) {
@@ -33,9 +37,12 @@ static void configure_mesh(tc_render_mesh *mesh) {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(tc_vertex),
                           (void *)(uintptr_t)offsetof(tc_vertex, uv));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(tc_vertex),
+    glVertexAttribPointer(2, 3, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(tc_vertex),
                           (void *)(uintptr_t)offsetof(tc_vertex, color));
     glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(tc_vertex),
+                          (void *)(uintptr_t)offsetof(tc_vertex, tile));
+    glEnableVertexAttribArray(3);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
     glBindVertexArray(0);
 }
@@ -76,7 +83,7 @@ int tc_renderer_init(tc_renderer *renderer, tc_arena *arena,
         return 0;
     }
 
-    create_white_texture(&renderer->texture);
+    create_atlas_texture(&renderer->texture);
 
     tc_shader_bind(&renderer->shader);
     glUniform1i(renderer->u_texture, 0);
@@ -180,8 +187,8 @@ void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
     glUniformMatrix4fv(renderer->u_mvp, 1, GL_FALSE, mvp);
     glUniform3fv(renderer->u_camera_pos, 1, eye);
     glUniform3fv(renderer->u_fog_color, 1, sky_color);
-    glUniform1f(renderer->u_fog_start, 34.0f);
-    glUniform1f(renderer->u_fog_end, 56.0f);
+    glUniform1f(renderer->u_fog_start, 48.0f);
+    glUniform1f(renderer->u_fog_end, 80.0f);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, renderer->texture);

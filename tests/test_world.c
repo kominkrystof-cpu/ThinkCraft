@@ -2,6 +2,7 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/mesh.h"
+#include "thinkcraft/texture.h"
 #include "thinkcraft/world.h"
 
 #include <stdio.h>
@@ -48,7 +49,7 @@ static int validate_mesh(const tc_mesh *mesh, const tc_chunk *chunk,
             || !check(vertex->position[2] >= min_z
                       && vertex->position[2] <= max_z,
                       "z position out of chunk range")
-            || !check(vertex->color[3] == 255, "invalid vertex alpha")) {
+            || !check(vertex->tile < TC_TILE_COUNT, "invalid vertex tile")) {
             return 0;
         }
     }

@@ -5,7 +5,7 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 
-#define TC_WORLD_DEFAULT_RADIUS 3
+#define TC_WORLD_DEFAULT_RADIUS 4
 #define TC_WORLD_DEFAULT_SIZE (TC_WORLD_DEFAULT_RADIUS * 2 + 1)
 
 typedef struct {

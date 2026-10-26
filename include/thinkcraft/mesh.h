@@ -7,7 +7,8 @@
 typedef struct {
     float position[3];
     float uv[2];
-    uint8_t color[4];
+    uint8_t color[3];
+    uint8_t tile;
 } tc_vertex;
 
 typedef struct {

@@ -1,6 +1,7 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/mesh.h"
+#include "thinkcraft/texture.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,7 +51,7 @@ static int validate_mesh(const tc_mesh *mesh, size_t expected_quads) {
             || !check(vertex->position[2] >= 0.0f
                       && vertex->position[2] <= (float)TC_CHUNK_SIZE_Z,
                       "z position out of range")
-            || !check(vertex->color[3] == 255, "invalid vertex alpha")) {
+            || !check(vertex->tile < TC_TILE_COUNT, "invalid vertex tile")) {
             return 0;
         }
     }
@@ -135,6 +136,79 @@ static int test_greedy_cases(void) {
     tc_chunk_set(chunk, 5, 4, 4, TC_BLOCK_DIRT);
     ok = ok && build_and_check(chunk, 10);
 
+    free(chunk);
+    return ok;
+}
+
+static int test_face_tiles(void) {
+    tc_chunk *chunk = malloc(sizeof(*chunk));
+    tc_mesh mesh;
+    tc_mesh_stats stats;
+    int counts[TC_TILE_COUNT] = {0};
+    int ok = 1;
+
+    if (chunk == NULL) {
+        return 0;
+    }
+
+    tc_chunk_init(chunk, 0, 0, 0);
+    tc_chunk_set(chunk, 4, 4, 4, TC_BLOCK_GRASS);
+    tc_mesh_init(&mesh);
+    ok = ok && check(tc_chunk_build_mesh(chunk, &mesh, &stats),
+                     "grass tile mesh build failed");
+    ok = ok && check(mesh.quad_count == 6, "grass block did not produce 6 quads");
+
+    for (size_t quad = 0; quad < mesh.quad_count; quad++) {
+        uint8_t tile = mesh.vertices[quad * 4].tile;
+
+        for (int vertex = 1; vertex < 4; vertex++) {
+            if (!check(mesh.vertices[quad * 4 + vertex].tile == tile,
+                       "quad uses multiple tiles")) {
+                ok = 0;
+            }
+        }
+        if (tile >= TC_TILE_COUNT) {
+            ok = check(0, "quad tile out of range");
+        } else {
+            counts[tile]++;
+        }
+    }
+
+    ok = ok && check(counts[TC_TILE_GRASS_TOP] == 1,
+                     "grass top tile missing")
+      && check(counts[TC_TILE_DIRT] == 1,
+               "grass bottom did not use dirt")
+      && check(counts[TC_TILE_GRASS_SIDE] == 4,
+               "grass side tiles missing");
+
+    tc_chunk_clear(chunk);
+    tc_chunk_set(chunk, 4, 4, 4, TC_BLOCK_SAND);
+    ok = ok && check(tc_chunk_build_mesh(chunk, &mesh, &stats),
+                     "sand tile mesh build failed");
+    for (size_t quad = 0; quad < mesh.quad_count; quad++) {
+        if (!check(mesh.vertices[quad * 4].tile == TC_TILE_SAND,
+                   "sand did not use the sand tile")) {
+            ok = 0;
+        }
+    }
+
+    tc_chunk_clear(chunk);
+    tc_chunk_set(chunk, 4, 4, 4, TC_BLOCK_STONE);
+    ok = ok && check(tc_chunk_build_mesh(chunk, &mesh, &stats),
+                     "stone tile mesh build failed");
+    for (size_t quad = 0; quad < mesh.quad_count; quad++) {
+        if (!check(mesh.vertices[quad * 4].tile == TC_TILE_STONE,
+                   "stone did not use the stone tile")) {
+            ok = 0;
+        }
+    }
+
+    if (ok) {
+        printf("face tiles: grass top/side/bottom, sand, and stone mapping "
+               "passed\n");
+    }
+
+    tc_mesh_shutdown(&mesh);
     free(chunk);
     return ok;
 }
@@ -225,6 +299,7 @@ int main(void) {
 
     ok = ok && test_chunk_access();
     ok = ok && test_greedy_cases();
+    ok = ok && test_face_tiles();
     ok = ok && test_demo_mesh();
     ok = ok && test_mesh_performance();
 
