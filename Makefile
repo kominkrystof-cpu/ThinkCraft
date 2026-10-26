@@ -36,6 +36,7 @@ TEST_CHUNK := $(BUILD)/tests/test_chunk_mesh
 TEST_WORLD := $(BUILD)/tests/test_world
 TEST_PLAYER := $(BUILD)/tests/test_player
 TEST_TEXTURE := $(BUILD)/tests/test_texture
+TEST_RAYCAST := $(BUILD)/tests/test_raycast
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -43,6 +44,7 @@ ENGINE_C_SRCS := \
 	src/core/arena.c \
 	src/core/log.c \
 	src/core/platform.c \
+	src/gfx/hud.c \
 	src/gfx/mesh.c \
 	src/gfx/renderer.c \
 	src/gfx/shader.c \
@@ -52,6 +54,7 @@ ENGINE_C_SRCS := \
 	src/player/player.c \
 	src/world/chunk.c \
 	src/world/chunk_mesh.c \
+	src/world/raycast.c \
 	src/world/world.c \
 	third_party/glad/src/gl.c
 
@@ -107,6 +110,20 @@ TEST_TEXTURE_OBJS := \
 	$(BUILD)/tests/obj/tests/test_texture.o \
 	$(BUILD)/tests/obj/src/gfx/texture.o
 
+TEST_RAYCAST_OBJS := \
+	$(BUILD)/tests/obj/tests/test_raycast.o \
+	$(BUILD)/tests/obj/src/world/raycast.o \
+	$(BUILD)/tests/obj/src/world/world.o \
+	$(BUILD)/tests/obj/src/world/chunk.o \
+	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/gfx/mesh.o \
+	$(BUILD)/tests/obj/src/core/arena.o \
+	$(BUILD)/tests/obj/src/core/log.o \
+	$(BUILD)/tests/obj/src/core/platform.o \
+	$(BUILD)/tests/obj/src/math/mat4.o \
+	$(BUILD)/tests/obj/src/asm/mat4_mul.o \
+	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
+
 all: engine
 
 engine: check-deps $(ENGINE_BIN)
@@ -143,6 +160,10 @@ $(TEST_TEXTURE): $(TEST_TEXTURE_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_RAYCAST): $(TEST_RAYCAST_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -159,7 +180,7 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math test-chunk-mesh test-world test-player test-texture
+test: test-math test-chunk-mesh test-world test-player test-texture test-raycast
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
@@ -176,7 +197,10 @@ test-player: $(TEST_PLAYER)
 test-texture: $(TEST_TEXTURE)
 	./$(TEST_TEXTURE)
 
-test-all: test-math test-chunk-mesh test-world test-player test-texture test-transpiler
+test-raycast: $(TEST_RAYCAST)
+	./$(TEST_RAYCAST)
+
+test-all: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -194,6 +218,6 @@ clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d) $(TEST_RAYCAST_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-raycast test-transpiler transpiler run benchmark clean

@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates deterministic terrain, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, and distance fog.
+The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates deterministic terrain, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, block breaking and placing, and distance fog.
 
 ## Status
 
@@ -35,6 +35,9 @@ The current streaming-world benchmark runs at roughly 1,400 FPS on the developme
 - Textured grass, dirt, stone, and sand with per-face shading
 - Repeating tile-local UVs on greedy-merged quads
 - First-person WASD controller with mouse look and Ctrl sprint
+- DDA voxel picking with a six-block reach
+- Left/right click block breaking and placing with immediate remeshing
+- Four-slot hotbar with 1-4 selection, crosshair, and placement collision checks
 - Gravity, jumping, AABB voxel collision, one-block auto-step, and surface spawning
 - Procedural stone, grass, dirt, and sand demo terrain
 - Arena allocator for startup allocations
@@ -43,9 +46,9 @@ The current streaming-world benchmark runs at roughly 1,400 FPS on the developme
 - `tc_chunk_count_solid` implemented in x86-64 NASM
 - Frame-time and FPS reporting
 - Automated render benchmark and mesh benchmark output
-- Chunk, world, player, texture, and mesh tests covering boundary culling,
-  streaming, generation determinism, negative coordinates, collision, jumping,
-  look limits, and atlas tile data
+- Chunk, world, player, texture, raycast, and mesh tests covering boundary
+  culling, streaming, generation determinism, negative coordinates, collision,
+  jumping, look limits, atlas tile data, voxel picking, and placement overlap
 
 ## Requirements
 
@@ -105,11 +108,13 @@ or directly:
 Controls:
 
 ```text
-Left click    capture the mouse
+Left click    capture the mouse; break the targeted block
+Right click   place the selected block
 WASD          move
 Mouse         look around
 Space         jump
 Ctrl          sprint
+1-4           select grass, dirt, stone, or sand
 Escape        release the mouse; press again to close the window
 ```
 
@@ -155,7 +160,7 @@ The benchmark prints the elapsed time, total frames, average FPS, and average mi
 make test
 ```
 
-`make test` runs the portable math, chunk-mesh, world, player, and texture test suites.
+`make test` runs the portable math, chunk-mesh, world, player, texture, and raycast test suites.
 
 Individual test targets:
 
@@ -165,11 +170,12 @@ make test-chunk-mesh
 make test-world
 make test-player
 make test-texture
+make test-raycast
 ```
 
-The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, and sand palettes.
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, and sand palettes. The raycast test covers forward and negative-coordinate voxel hits, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected.
 
-To run the math, chunk, world, player, texture, and optional transpiler tests:
+To run the math, chunk, world, player, texture, raycast, and optional transpiler tests:
 
 ```sh
 make test-all
@@ -190,10 +196,10 @@ include/thinkcraft/     Public engine headers
 src/main.c              Entry point
 src/app.c               Application loop and command-line handling
 src/core/               Arena allocator, logging, platform helpers
-src/gfx/                Window, shader, mesh, renderer, and texture atlas code
+src/gfx/                Window, shader, mesh, renderer, HUD, and atlas code
 src/math/               Matrix math in C
 src/player/             First-person movement and voxel collision
-src/world/              Chunk storage, streaming world, demo terrain, and greedy meshing
+src/world/              Chunk storage, streaming world, terrain, raycasting, and meshing
 src/asm/                NASM hot paths
 shaders/                GLSL shaders
 third_party/glad/       Vendored Glad 3.3 core loader
@@ -219,7 +225,7 @@ scripts/                Development helper scripts
 
 ## Performance Notes
 
-The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, one indexed draw per chunk, a nearest-filtered procedural atlas, and a direct-mapped 9x9 streaming ring. Important planned work includes:
+The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, one indexed draw per chunk, a nearest-filtered procedural atlas, a direct-mapped 9x9 streaming ring, and dirty-only remeshing after block edits. Important planned work includes:
 
 - Frustum culling
 - Chunk visibility scheduling
@@ -272,6 +278,7 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] Deterministic demo terrain across a chunk grid
 - [x] Dynamic chunk loading and unloading
 - [x] Player controller and collision
+- [x] Block picking, breaking, and placing
 - [ ] Full world generation and biomes
 - [ ] Save and load format
 - [ ] Frustum culling and chunk scheduling

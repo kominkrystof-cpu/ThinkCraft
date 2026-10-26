@@ -32,5 +32,6 @@ void tc_player_update(tc_player *player, const tc_world *world,
                       const tc_player_input *input, float dt);
 void tc_player_get_eye(const tc_player *player, float eye[3]);
 void tc_player_get_forward(const tc_player *player, float forward[3]);
+int tc_player_intersects_block(const tc_player *player, int x, int y, int z);
 
 #endif

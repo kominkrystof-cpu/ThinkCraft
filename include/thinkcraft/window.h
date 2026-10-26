@@ -11,11 +11,16 @@ typedef enum {
     TC_KEY_SPACE,
     TC_KEY_CTRL,
     TC_KEY_ESCAPE,
+    TC_KEY_1,
+    TC_KEY_2,
+    TC_KEY_3,
+    TC_KEY_4,
     TC_KEY_COUNT
 } tc_key;
 
 typedef enum {
     TC_MOUSE_LEFT,
+    TC_MOUSE_RIGHT,
     TC_MOUSE_BUTTON_COUNT
 } tc_mouse_button;
 

@@ -274,3 +274,28 @@ void tc_player_get_forward(const tc_player *player, float forward[3]) {
     forward[1] = sinf(player->pitch);
     forward[2] = -cosf(player->yaw) * cos_pitch;
 }
+
+int tc_player_intersects_block(const tc_player *player, int x, int y, int z) {
+    float half_width;
+    float min_x;
+    float max_x;
+    float min_y;
+    float min_z;
+    float max_z;
+
+    if (player == NULL) {
+        return 0;
+    }
+
+    half_width = TC_PLAYER_WIDTH * 0.5f;
+    min_x = player->position[0] - half_width;
+    max_x = player->position[0] + half_width;
+    min_y = player->position[1];
+    min_z = player->position[2] - half_width;
+    max_z = player->position[2] + half_width;
+
+    return max_x > (float)x && min_x < (float)(x + 1)
+        && player->position[1] + TC_PLAYER_HEIGHT > (float)y
+        && min_y < (float)(y + 1)
+        && max_z > (float)z && min_z < (float)(z + 1);
+}

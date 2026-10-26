@@ -130,6 +130,35 @@ static int test_wall_collision(void) {
     return ok;
 }
 
+static int test_block_intersection(void) {
+    tc_player player;
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    int ok = 1;
+
+    tc_player_init(&player, position, 0.0f, 0.0f);
+
+    ok = ok && check(tc_player_intersects_block(&player, 0, 0, 0),
+                     "feet block should intersect")
+      && check(tc_player_intersects_block(&player, 0, 0, -1),
+               "overlapping negative block should intersect")
+      && check(tc_player_intersects_block(&player, 0, 1, 0),
+               "head block should intersect")
+      && check(!tc_player_intersects_block(&player, 1, 0, 0),
+               "adjacent x block should not intersect")
+      && check(!tc_player_intersects_block(&player, 0, 0, 1),
+               "adjacent z block should not intersect")
+      && check(!tc_player_intersects_block(&player, 0, -1, 0),
+               "block below feet should not intersect")
+      && check(!tc_player_intersects_block(&player, 0, 2, 0),
+               "block above head should not intersect");
+
+    if (ok) {
+        printf("player blocks: placement intersection checks passed\n");
+    }
+
+    return ok;
+}
+
 static int test_look_limits(void) {
     tc_player player;
     const float pi = 3.14159265358979323846f;
@@ -189,6 +218,7 @@ int main(void) {
 
     ok = ok && test_gravity_and_jump();
     ok = ok && test_wall_collision();
+    ok = ok && test_block_intersection();
     ok = ok && test_look_limits();
     ok = ok && test_spawn();
 

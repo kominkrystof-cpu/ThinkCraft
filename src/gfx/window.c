@@ -29,6 +29,14 @@ static int map_key(int key) {
             return TC_KEY_CTRL;
         case GLFW_KEY_ESCAPE:
             return TC_KEY_ESCAPE;
+        case GLFW_KEY_1:
+            return TC_KEY_1;
+        case GLFW_KEY_2:
+            return TC_KEY_2;
+        case GLFW_KEY_3:
+            return TC_KEY_3;
+        case GLFW_KEY_4:
+            return TC_KEY_4;
         default:
             return -1;
     }
@@ -55,18 +63,27 @@ static void key_callback(GLFWwindow *handle, int key, int scancode, int action, 
 
 static void mouse_button_callback(GLFWwindow *handle, int button, int action, int mods) {
     tc_window *window = glfwGetWindowUserPointer(handle);
+    int mapped;
 
     (void)mods;
 
-    if (window == NULL || button != GLFW_MOUSE_BUTTON_LEFT) {
+    if (window == NULL) {
+        return;
+    }
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        mapped = TC_MOUSE_LEFT;
+    } else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+        mapped = TC_MOUSE_RIGHT;
+    } else {
         return;
     }
 
     if (action == GLFW_PRESS) {
-        window->mouse_buttons[TC_MOUSE_LEFT] = 1;
-        window->mouse_pressed[TC_MOUSE_LEFT] = 1;
+        window->mouse_buttons[mapped] = 1;
+        window->mouse_pressed[mapped] = 1;
     } else if (action == GLFW_RELEASE) {
-        window->mouse_buttons[TC_MOUSE_LEFT] = 0;
+        window->mouse_buttons[mapped] = 0;
     }
 }
 

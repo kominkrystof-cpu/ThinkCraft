@@ -1,10 +1,12 @@
 #include "thinkcraft/app.h"
 #include "thinkcraft/arena.h"
+#include "thinkcraft/hud.h"
 #include "thinkcraft/log.h"
 #include "thinkcraft/math.h"
 #include "thinkcraft/mesh.h"
 #include "thinkcraft/platform.h"
 #include "thinkcraft/player.h"
+#include "thinkcraft/raycast.h"
 #include "thinkcraft/renderer.h"
 #include "thinkcraft/window.h"
 #include "thinkcraft/world.h"
@@ -22,6 +24,30 @@ typedef struct app_options {
     int benchmark;
     double benchmark_seconds;
 } app_options;
+
+typedef struct hotbar_entry {
+    uint8_t block;
+    const char *name;
+    tc_hud_swatch swatch;
+} hotbar_entry;
+
+static const hotbar_entry hotbar[] = {
+    {TC_BLOCK_GRASS, "grass", {{0.32f, 0.60f, 0.22f}}},
+    {TC_BLOCK_DIRT, "dirt", {{0.52f, 0.37f, 0.25f}}},
+    {TC_BLOCK_STONE, "stone", {{0.50f, 0.50f, 0.53f}}},
+    {TC_BLOCK_SAND, "sand", {{0.86f, 0.80f, 0.61f}}}
+};
+
+#define HOTBAR_COUNT ((int)(sizeof(hotbar) / sizeof(hotbar[0])))
+
+static const char *block_name(uint8_t block) {
+    for (int index = 0; index < HOTBAR_COUNT; index++) {
+        if (hotbar[index].block == block) {
+            return hotbar[index].name;
+        }
+    }
+    return block == TC_BLOCK_AIR ? "air" : "unknown";
+}
 
 static void print_help(const char *program) {
     printf("ThinkCraft\n");
@@ -43,7 +69,9 @@ static void print_help(const char *program) {
     printf("  Space           Jump\n");
     printf("  Ctrl            Sprint\n");
     printf("  Escape          Release the mouse, then close the window\n");
-    printf("  Left click      Capture the mouse again\n");
+    printf("  Left click      Capture the mouse; break the targeted block\n");
+    printf("  Right click     Place the selected block\n");
+    printf("  1-4             Select grass, dirt, stone, or sand\n");
 }
 
 static int parse_options(int argc, char **argv, app_options *options) {
@@ -205,6 +233,21 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
     return 1;
 }
 
+static int apply_block_edit(tc_world *world, tc_renderer *renderer,
+                            tc_mesh *mesh, tc_render_mesh *render_meshes,
+                            size_t *draw_calls, int x, int y, int z,
+                            uint8_t block) {
+    tc_mesh_stats stats;
+    size_t remeshed = 0;
+
+    if (!tc_world_set_block(world, x, y, z, block)) {
+        return 0;
+    }
+
+    return rebuild_dirty_chunks(world, renderer, mesh, render_meshes, &stats,
+                                &remeshed, draw_calls);
+}
+
 int tc_app_run(int argc, char **argv) {
     const float spawn_x = 8.5f;
     const float spawn_z = 8.5f;
@@ -229,8 +272,10 @@ int tc_app_run(int argc, char **argv) {
     size_t initial_remeshed = 0;
     size_t draw_calls = 0;
     tc_mesh_stats initial_stats;
+    tc_hud_swatch hud_swatches[HOTBAR_COUNT];
     long long total_frames = 0;
     int frames_since_report = 0;
+    int selected_hotbar = 0;
     int running = 1;
     int parse_result;
     int world_initialized = 0;
@@ -245,6 +290,10 @@ int tc_app_run(int argc, char **argv) {
     }
     if (parse_result == 0) {
         return 0;
+    }
+
+    for (int index = 0; index < HOTBAR_COUNT; index++) {
+        hud_swatches[index] = hotbar[index].swatch;
     }
 
     if (!tc_arena_init(&arena, 16 * 1024 * 1024)) {
@@ -338,7 +387,8 @@ int tc_app_run(int argc, char **argv) {
 
     if (!options.benchmark) {
         tc_log_info("controls: click to capture, WASD move, mouse look, "
-                    "Space jump, Ctrl sprint, Escape release");
+                    "Space jump, Ctrl sprint, 1-4 select block, "
+                    "left/right break/place, Escape release");
     }
 
     start_time = tc_window_time();
@@ -349,6 +399,7 @@ int tc_app_run(int argc, char **argv) {
         int framebuffer_width = 0;
         int framebuffer_height = 0;
         int captured;
+        int captured_before;
         int center_chunk_x;
         int center_chunk_z;
         double now;
@@ -380,6 +431,7 @@ int tc_app_run(int argc, char **argv) {
         }
 
         captured = tc_window_mouse_captured(&window);
+        captured_before = captured;
         if (!options.benchmark && !captured
             && tc_window_mouse_pressed(&window, TC_MOUSE_LEFT)) {
             tc_window_set_mouse_captured(&window, 1);
@@ -414,6 +466,17 @@ int tc_app_run(int argc, char **argv) {
 
             input.jump = tc_window_key_down(&window, TC_KEY_SPACE);
             input.sprint = tc_window_key_down(&window, TC_KEY_CTRL);
+
+            for (int index = 0; index < HOTBAR_COUNT; index++) {
+                if (tc_window_key_pressed(&window,
+                                          (tc_key)(TC_KEY_1 + index))) {
+                    if (selected_hotbar != index) {
+                        selected_hotbar = index;
+                        tc_log_info("selected block: %s",
+                                    hotbar[index].name);
+                    }
+                }
+            }
         }
 
         tc_player_update(&player, &world, &input, (float)dt);
@@ -452,6 +515,51 @@ int tc_app_run(int argc, char **argv) {
 
         tc_player_get_eye(&player, eye);
         tc_player_get_forward(&player, forward);
+
+        if (!options.benchmark && captured && captured_before) {
+            int break_clicked = tc_window_mouse_pressed(&window,
+                                                        TC_MOUSE_LEFT);
+            int place_clicked = tc_window_mouse_pressed(&window,
+                                                        TC_MOUSE_RIGHT);
+
+            if (break_clicked || place_clicked) {
+                tc_raycast_hit hit;
+
+                if (tc_world_raycast(&world, eye, forward, 6.0f, &hit)) {
+                    if (break_clicked) {
+                        if (apply_block_edit(&world, &renderer, &mesh,
+                                             render_meshes, &draw_calls,
+                                             hit.x, hit.y, hit.z,
+                                             TC_BLOCK_AIR)) {
+                            tc_log_info("broke %s at (%d, %d, %d)",
+                                        block_name(hit.block), hit.x, hit.y,
+                                        hit.z);
+                        }
+                    } else if (!tc_player_intersects_block(&player,
+                                                           hit.previous_x,
+                                                           hit.previous_y,
+                                                           hit.previous_z)
+                               && tc_world_get_block(&world,
+                                                     hit.previous_x,
+                                                     hit.previous_y,
+                                                     hit.previous_z)
+                                  == TC_BLOCK_AIR) {
+                        uint8_t block = hotbar[selected_hotbar].block;
+
+                        if (apply_block_edit(&world, &renderer, &mesh,
+                                             render_meshes, &draw_calls,
+                                             hit.previous_x,
+                                             hit.previous_y,
+                                             hit.previous_z, block)) {
+                            tc_log_info("placed %s at (%d, %d, %d)",
+                                        block_name(block), hit.previous_x,
+                                        hit.previous_y, hit.previous_z);
+                        }
+                    }
+                }
+            }
+        }
+
         target[0] = eye[0] + forward[0];
         target[1] = eye[1] + forward[1];
         target[2] = eye[2] + forward[2];
@@ -460,6 +568,11 @@ int tc_app_run(int argc, char **argv) {
                                 framebuffer_height);
         for (size_t index = 0; index < slot_count; index++) {
             tc_renderer_draw_mesh(&renderer, &render_meshes[index]);
+        }
+        tc_hud_draw_hotbar(framebuffer_width, framebuffer_height,
+                           hud_swatches, HOTBAR_COUNT, selected_hotbar);
+        if (captured) {
+            tc_hud_draw_crosshair(framebuffer_width, framebuffer_height);
         }
         tc_window_swap(&window);
 
@@ -472,9 +585,10 @@ int tc_app_run(int argc, char **argv) {
             double fps = (double)frames_since_report / elapsed;
 
             snprintf(title, sizeof(title),
-                     "ThinkCraft | chunk (%d, %d) | %.1f FPS | %dx%d",
-                     world.center_chunk_x, world.center_chunk_z, fps,
-                     framebuffer_width, framebuffer_height);
+                     "ThinkCraft | chunk (%d, %d) | %s | %.1f FPS | %dx%d",
+                     world.center_chunk_x, world.center_chunk_z,
+                     hotbar[selected_hotbar].name, fps, framebuffer_width,
+                     framebuffer_height);
             tc_window_set_title(&window, title);
             tc_log_info("%.1f FPS", fps);
             frames_since_report = 0;
