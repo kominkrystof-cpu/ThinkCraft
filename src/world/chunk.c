@@ -1,6 +1,6 @@
 #include "thinkcraft/chunk.h"
+#include "thinkcraft/terrain.h"
 
-#include <math.h>
 #include <string.h>
 
 static const int neighbor_offsets[6][3] = {
@@ -60,60 +60,8 @@ int tc_chunk_set(tc_chunk *chunk, int x, int y, int z, uint8_t block) {
     return 1;
 }
 
-void tc_chunk_generate_demo(tc_chunk *chunk) {
-    if (chunk == NULL) {
-        return;
-    }
-
-    tc_chunk_clear(chunk);
-
-    for (int z = 0; z < TC_CHUNK_SIZE_Z; z++) {
-        for (int x = 0; x < TC_CHUNK_SIZE_X; x++) {
-            float wave = 2.5f * sinf((float)x * 0.55f)
-                       + 2.0f * cosf((float)z * 0.47f);
-            int height = 12 + (int)wave;
-
-            if (height < 8) {
-                height = 8;
-            }
-            if (height > 20) {
-                height = 20;
-            }
-
-            for (int y = 0; y <= height; y++) {
-                uint8_t block;
-
-                if (y == height) {
-                    block = (x < 4 && z < 4) ? TC_BLOCK_SAND : TC_BLOCK_GRASS;
-                } else if (y >= height - 3) {
-                    block = TC_BLOCK_DIRT;
-                } else {
-                    block = TC_BLOCK_STONE;
-                }
-
-                tc_chunk_set(chunk, x, y, z, block);
-            }
-
-            if (x >= 10 && x <= 13 && z >= 8 && z <= 11) {
-                int extra = 2;
-                if (x == 11 || x == 12) {
-                    extra++;
-                }
-                if (z == 9 || z == 10) {
-                    extra++;
-                }
-
-                for (int y = height + 1;
-                     y <= height + extra && y < TC_CHUNK_SIZE_Y;
-                     y++) {
-                    tc_chunk_set(chunk, x, y, z, TC_BLOCK_STONE);
-                }
-            }
-        }
-    }
-
-    chunk->solid_count = tc_chunk_count_solid(chunk->blocks,
-                                              TC_CHUNK_BLOCK_COUNT);
+void tc_chunk_generate(tc_chunk *chunk, uint32_t seed) {
+    tc_terrain_generate_chunk(chunk, seed);
 }
 
 uint32_t tc_chunk_visible_face_count_sampled(const tc_chunk *chunk,

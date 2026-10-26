@@ -184,6 +184,41 @@ static int test_look_limits(void) {
     return ok;
 }
 
+static int test_void_floor(void) {
+    tc_arena arena;
+    tc_world world;
+    tc_player player;
+    tc_player_input input = {0.0f, 0.0f, 0, 0};
+    int ok = 1;
+
+    if (!tc_arena_init(&arena, 2 * 1024 * 1024)) {
+        return 0;
+    }
+
+    if (!tc_world_init(&world, &arena, 0)) {
+        tc_arena_shutdown(&arena);
+        return 0;
+    }
+
+    {
+        float position[3] = {2.5f, 8.0f, 2.5f};
+        tc_player_init(&player, position, 0.0f, 0.0f);
+    }
+
+    simulate(&player, &world, input, 240);
+    ok = ok && check(player.on_ground, "player did not reach the void floor")
+      && check(fabsf(player.position[1] - TC_WORLD_FLOOR_Y) < 0.001f,
+               "player fell through the void floor")
+      && check(fabsf(player.velocity[1]) < 0.001f,
+               "player did not stop at the void floor");
+
+    printf("player void floor: stopped at y=%.3f\n", player.position[1]);
+
+    tc_world_shutdown(&world);
+    tc_arena_shutdown(&arena);
+    return ok;
+}
+
 static int test_spawn(void) {
     tc_arena arena;
     tc_world world;
@@ -220,6 +255,7 @@ int main(void) {
     ok = ok && test_wall_collision();
     ok = ok && test_block_intersection();
     ok = ok && test_look_limits();
+    ok = ok && test_void_floor();
     ok = ok && test_spawn();
 
     if (!ok) {

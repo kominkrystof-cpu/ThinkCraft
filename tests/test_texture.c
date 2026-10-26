@@ -74,7 +74,8 @@ static int test_generated_atlas(void) {
         TC_TILE_GRASS_SIDE,
         TC_TILE_DIRT,
         TC_TILE_STONE,
-        TC_TILE_SAND
+        TC_TILE_SAND,
+        TC_TILE_BEDROCK
     };
 
     tc_texture_generate_atlas(pixels);
@@ -127,14 +128,19 @@ static int test_generated_atlas(void) {
     const uint8_t *dirt = tile_pixel(pixels, TC_TILE_DIRT, 4, 4);
     const uint8_t *stone = tile_pixel(pixels, TC_TILE_STONE, 4, 4);
     const uint8_t *sand = tile_pixel(pixels, TC_TILE_SAND, 4, 4);
+    const uint8_t *bedrock = tile_pixel(pixels, TC_TILE_BEDROCK, 4, 4);
     int stone_spread = (int)stone[0] - (int)stone[2];
+    int bedrock_spread = (int)bedrock[0] - (int)bedrock[2];
 
     if (!check(dirt[0] > dirt[1] && dirt[1] > dirt[2],
                "dirt color is not brown")
         || !check(stone_spread < 40 && stone_spread > -40,
                   "stone color is not gray")
         || !check(sand[0] > sand[1] && sand[1] > sand[2],
-                  "sand color is not warm")) {
+                  "sand color is not warm")
+        || !check(bedrock[0] < 100 && bedrock[1] < 100
+                  && bedrock_spread < 20 && bedrock_spread > -20,
+                  "bedrock color is not dark gray")) {
         return 0;
     }
 

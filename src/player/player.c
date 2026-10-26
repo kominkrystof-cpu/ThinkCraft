@@ -250,6 +250,12 @@ void tc_player_update(tc_player *player, const tc_world *world,
                 player->velocity[0] * dt,
                 player->velocity[1] * dt,
                 player->velocity[2] * dt);
+
+    if (player->position[1] < TC_WORLD_FLOOR_Y) {
+        player->position[1] = TC_WORLD_FLOOR_Y;
+        player->velocity[1] = 0.0f;
+        player->on_ground = 1;
+    }
 }
 
 void tc_player_get_eye(const tc_player *player, float eye[3]) {

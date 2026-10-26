@@ -8,10 +8,13 @@
 #include "thinkcraft/player.h"
 #include "thinkcraft/raycast.h"
 #include "thinkcraft/renderer.h"
+#include "thinkcraft/terrain.h"
 #include "thinkcraft/window.h"
 #include "thinkcraft/world.h"
 
+#include <errno.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +26,9 @@ typedef struct app_options {
     int vsync_set;
     int benchmark;
     double benchmark_seconds;
+    uint32_t seed;
+    float render_scale;
+    float target_fps;
 } app_options;
 
 typedef struct hotbar_entry {
@@ -46,6 +52,9 @@ static const char *block_name(uint8_t block) {
             return hotbar[index].name;
         }
     }
+    if (block == TC_BLOCK_BEDROCK) {
+        return "bedrock";
+    }
     return block == TC_BLOCK_AIR ? "air" : "unknown";
 }
 
@@ -61,6 +70,11 @@ static void print_help(const char *program) {
     printf("  --no-vsync      Disable vertical sync (default in benchmark mode)\n");
     printf("  --benchmark     Exit after the benchmark duration\n");
     printf("  --seconds N     Benchmark duration in seconds (default 10)\n");
+    printf("  --seed N        Terrain seed (default 0x%08x)\n",
+           TC_TERRAIN_DEFAULT_SEED);
+    printf("  --render-scale N  Internal render scale 0.5-1.0 "
+           "(default 1.0, 0 = adaptive)\n");
+    printf("  --target-fps N  Adaptive render-scale FPS target (default 500)\n");
     printf("  --help          Show this help\n");
     printf("\n");
     printf("Controls:\n");
@@ -81,6 +95,9 @@ static int parse_options(int argc, char **argv, app_options *options) {
     options->vsync_set = 0;
     options->benchmark = 0;
     options->benchmark_seconds = 10.0;
+    options->seed = TC_TERRAIN_DEFAULT_SEED;
+    options->render_scale = 1.0f;
+    options->target_fps = 500.0f;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -100,6 +117,43 @@ static int parse_options(int argc, char **argv, app_options *options) {
             options->benchmark = 1;
         } else if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) {
             options->benchmark_seconds = atof(argv[++i]);
+        } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            unsigned long value;
+
+            errno = 0;
+            value = strtoul(argv[++i], &end, 0);
+            if (errno != 0 || end == argv[i] || *end != '\0'
+                || value > UINT32_MAX) {
+                tc_log_error("invalid seed: %s", argv[i]);
+                return -1;
+            }
+            options->seed = (uint32_t)value;
+        } else if (strcmp(argv[i], "--render-scale") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            float value;
+
+            errno = 0;
+            value = strtof(argv[++i], &end);
+            if (errno != 0 || end == argv[i] || *end != '\0'
+                || !isfinite(value)
+                || (value != 0.0f && (value < 0.5f || value > 1.0f))) {
+                tc_log_error("invalid render scale: %s", argv[i]);
+                return -1;
+            }
+            options->render_scale = value;
+        } else if (strcmp(argv[i], "--target-fps") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            float value;
+
+            errno = 0;
+            value = strtof(argv[++i], &end);
+            if (errno != 0 || end == argv[i] || *end != '\0'
+                || !isfinite(value) || value <= 0.0f) {
+                tc_log_error("invalid target FPS: %s", argv[i]);
+                return -1;
+            }
+            options->target_fps = value;
         } else {
             tc_log_error("unknown or incomplete option: %s", argv[i]);
             print_help(argv[0]);
@@ -173,22 +227,76 @@ static int resolve_shader_dir(char *buffer, size_t size) {
     return tc_path_exists("shaders/basic.vert");
 }
 
+static int rebuild_slot_mesh(tc_world *world, tc_renderer *renderer,
+                             tc_mesh *mesh, tc_render_mesh *render_mesh,
+                             tc_world_slot *slot, tc_mesh_stats *totals,
+                             size_t *remeshed) {
+    tc_mesh_stats chunk_stats;
+
+    if (!tc_world_build_chunk_mesh(world, slot->chunk_x, slot->chunk_z, mesh,
+                                   &chunk_stats)
+        || !tc_renderer_upload_mesh(renderer, render_mesh, mesh)) {
+        return 0;
+    }
+
+    totals->solid_blocks += chunk_stats.solid_blocks;
+    totals->visible_faces += chunk_stats.visible_faces;
+    totals->quads += chunk_stats.quads;
+    totals->vertices += chunk_stats.vertices;
+    totals->indices += chunk_stats.indices;
+    totals->scan_ms += chunk_stats.scan_ms;
+    totals->build_ms += chunk_stats.build_ms;
+    slot->dirty = 0;
+    (*remeshed)++;
+    return 1;
+}
+
 static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
                                 tc_mesh *mesh, tc_render_mesh *render_meshes,
-                                tc_mesh_stats *stats, size_t *remeshed_out,
+                                size_t max_chunks, double time_budget_ms,
+                                int priority_index, tc_mesh_stats *stats,
+                                size_t *remeshed_out, size_t *pending_out,
                                 size_t *draw_calls_out) {
     tc_mesh_stats totals = {0};
+    size_t slot_count;
     size_t remeshed = 0;
+    size_t pending = 0;
     size_t draw_calls = 0;
+    double start;
+    int limit_reached = 0;
 
     if (world == NULL || renderer == NULL || mesh == NULL
         || render_meshes == NULL || stats == NULL) {
         return 0;
     }
 
-    for (int index = 0; index < world->size * world->size; index++) {
-        tc_world_slot *slot = &world->slots[index];
+    slot_count = (size_t)world->size * (size_t)world->size;
+    start = tc_time_now();
 
+    if (priority_index >= 0 && (size_t)priority_index < slot_count) {
+        tc_world_slot *slot = &world->slots[priority_index];
+
+        if (!slot->loaded) {
+            if (render_meshes[priority_index].vao != 0) {
+                tc_renderer_destroy_mesh(&render_meshes[priority_index]);
+            }
+        } else if (slot->dirty) {
+            if (!rebuild_slot_mesh(world, renderer, mesh,
+                                   &render_meshes[priority_index], slot,
+                                   &totals, &remeshed)) {
+                return 0;
+            }
+        }
+    }
+
+    for (size_t index = 0; index < slot_count; index++) {
+        tc_world_slot *slot;
+
+        if ((int)index == priority_index) {
+            continue;
+        }
+
+        slot = &world->slots[index];
         if (!slot->loaded) {
             if (render_meshes[index].vao != 0) {
                 tc_renderer_destroy_mesh(&render_meshes[index]);
@@ -196,27 +304,29 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
             continue;
         }
 
-        if (slot->dirty) {
-            tc_mesh_stats chunk_stats;
-
-            if (!tc_world_build_chunk_mesh(world, slot->chunk_x, slot->chunk_z,
-                                           mesh, &chunk_stats)
-                || !tc_renderer_upload_mesh(renderer, &render_meshes[index],
-                                            mesh)) {
-                return 0;
-            }
-
-            totals.solid_blocks += chunk_stats.solid_blocks;
-            totals.visible_faces += chunk_stats.visible_faces;
-            totals.quads += chunk_stats.quads;
-            totals.vertices += chunk_stats.vertices;
-            totals.indices += chunk_stats.indices;
-            totals.scan_ms += chunk_stats.scan_ms;
-            totals.build_ms += chunk_stats.build_ms;
-            slot->dirty = 0;
-            remeshed++;
+        if (!slot->dirty) {
+            continue;
         }
 
+        if (!limit_reached && max_chunks != 0 && remeshed >= max_chunks) {
+            limit_reached = 1;
+        }
+        if (!limit_reached && time_budget_ms > 0.0 && remeshed > 0
+            && (tc_time_now() - start) * 1000.0 >= time_budget_ms) {
+            limit_reached = 1;
+        }
+        if (limit_reached) {
+            pending++;
+            continue;
+        }
+
+        if (!rebuild_slot_mesh(world, renderer, mesh, &render_meshes[index],
+                               slot, &totals, &remeshed)) {
+            return 0;
+        }
+    }
+
+    for (size_t index = 0; index < slot_count; index++) {
         if (render_meshes[index].index_count > 0) {
             draw_calls++;
         }
@@ -226,6 +336,9 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
     if (remeshed_out != NULL) {
         *remeshed_out = remeshed;
     }
+    if (pending_out != NULL) {
+        *pending_out = pending;
+    }
     if (draw_calls_out != NULL) {
         *draw_calls_out = draw_calls;
     }
@@ -233,19 +346,151 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
     return 1;
 }
 
+static int find_slot_index(const tc_world *world, int chunk_x, int chunk_z) {
+    if (world == NULL) {
+        return -1;
+    }
+
+    for (int index = 0; index < world->size * world->size; index++) {
+        const tc_world_slot *slot = &world->slots[index];
+
+        if (slot->loaded && slot->chunk_x == chunk_x
+            && slot->chunk_z == chunk_z) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+static void extract_frustum_planes(const float mvp[16], float planes[6][4]) {
+    planes[0][0] = mvp[3] + mvp[0];
+    planes[0][1] = mvp[7] + mvp[4];
+    planes[0][2] = mvp[11] + mvp[8];
+    planes[0][3] = mvp[15] + mvp[12];
+
+    planes[1][0] = mvp[3] - mvp[0];
+    planes[1][1] = mvp[7] - mvp[4];
+    planes[1][2] = mvp[11] - mvp[8];
+    planes[1][3] = mvp[15] - mvp[12];
+
+    planes[2][0] = mvp[3] + mvp[1];
+    planes[2][1] = mvp[7] + mvp[5];
+    planes[2][2] = mvp[11] + mvp[9];
+    planes[2][3] = mvp[15] + mvp[13];
+
+    planes[3][0] = mvp[3] - mvp[1];
+    planes[3][1] = mvp[7] - mvp[5];
+    planes[3][2] = mvp[11] - mvp[9];
+    planes[3][3] = mvp[15] - mvp[13];
+
+    planes[4][0] = mvp[3] + mvp[2];
+    planes[4][1] = mvp[7] + mvp[6];
+    planes[4][2] = mvp[11] + mvp[10];
+    planes[4][3] = mvp[15] + mvp[14];
+
+    planes[5][0] = mvp[3] - mvp[2];
+    planes[5][1] = mvp[7] - mvp[6];
+    planes[5][2] = mvp[11] - mvp[10];
+    planes[5][3] = mvp[15] - mvp[14];
+}
+
+static int chunk_in_frustum(const tc_world *world, size_t index,
+                            const float *planes) {
+    const tc_world_slot *slot = &world->slots[index];
+    float min_x;
+    float max_x;
+    float min_z;
+    float max_z;
+
+    if (!slot->loaded) {
+        return 0;
+    }
+
+    min_x = (float)slot->chunk.origin_x;
+    max_x = min_x + (float)TC_CHUNK_SIZE_X;
+    min_z = (float)slot->chunk.origin_z;
+    max_z = min_z + (float)TC_CHUNK_SIZE_Z;
+
+    for (int plane = 0; plane < 6; plane++) {
+        const float *value = &planes[plane * 4];
+        float x = value[0] >= 0.0f ? max_x : min_x;
+        float y = value[1] >= 0.0f ? (float)TC_CHUNK_SIZE_Y : 0.0f;
+        float z = value[2] >= 0.0f ? max_z : min_z;
+
+        if (value[0] * x + value[1] * y + value[2] * z + value[3] < 0.0f) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static float chunk_distance_sq(const tc_world *world, size_t index,
+                               const float eye[3]) {
+    const tc_world_slot *slot = &world->slots[index];
+    float min_x;
+    float max_x;
+    float min_z;
+    float max_z;
+    float dx = 0.0f;
+    float dz = 0.0f;
+
+    if (!slot->loaded) {
+        return 1.0e30f;
+    }
+
+    min_x = (float)slot->chunk.origin_x;
+    max_x = min_x + (float)TC_CHUNK_SIZE_X;
+    min_z = (float)slot->chunk.origin_z;
+    max_z = min_z + (float)TC_CHUNK_SIZE_Z;
+
+    if (eye[0] < min_x) {
+        dx = min_x - eye[0];
+    } else if (eye[0] > max_x) {
+        dx = eye[0] - max_x;
+    }
+    if (eye[2] < min_z) {
+        dz = min_z - eye[2];
+    } else if (eye[2] > max_z) {
+        dz = eye[2] - max_z;
+    }
+
+    return dx * dx + dz * dz;
+}
+
 static int apply_block_edit(tc_world *world, tc_renderer *renderer,
                             tc_mesh *mesh, tc_render_mesh *render_meshes,
                             size_t *draw_calls, int x, int y, int z,
-                            uint8_t block) {
+                            uint8_t block, double *remesh_ms_out) {
     tc_mesh_stats stats;
     size_t remeshed = 0;
+    size_t pending = 0;
+    int chunk_x;
+    int chunk_z;
+    int priority_index;
+    double start;
 
     if (!tc_world_set_block(world, x, y, z, block)) {
         return 0;
     }
 
-    return rebuild_dirty_chunks(world, renderer, mesh, render_meshes, &stats,
-                                &remeshed, draw_calls);
+    chunk_x = tc_math_floor_div(x, TC_CHUNK_SIZE_X);
+    chunk_z = tc_math_floor_div(z, TC_CHUNK_SIZE_Z);
+    priority_index = find_slot_index(world, chunk_x, chunk_z);
+    start = tc_time_now();
+
+    if (!rebuild_dirty_chunks(world, renderer, mesh, render_meshes, 1, 0.0,
+                              priority_index, &stats, &remeshed, &pending,
+                              draw_calls)) {
+        return 0;
+    }
+
+    if (remesh_ms_out != NULL) {
+        *remesh_ms_out = (tc_time_now() - start) * 1000.0;
+    }
+
+    return 1;
 }
 
 int tc_app_run(int argc, char **argv) {
@@ -258,6 +503,7 @@ int tc_app_run(int argc, char **argv) {
     tc_window window;
     tc_renderer renderer;
     tc_render_mesh *render_meshes = NULL;
+    size_t *draw_order = NULL;
     app_options options;
     char shader_dir[4096];
     char title[256];
@@ -270,6 +516,7 @@ int tc_app_run(int argc, char **argv) {
     double mesh_reduction = 0.0;
     size_t slot_count = 0;
     size_t initial_remeshed = 0;
+    size_t initial_pending = 0;
     size_t draw_calls = 0;
     tc_mesh_stats initial_stats;
     tc_hud_swatch hud_swatches[HOTBAR_COUNT];
@@ -283,6 +530,7 @@ int tc_app_run(int argc, char **argv) {
     int renderer_initialized = 0;
     int mesh_initialized = 0;
     int exit_code = 1;
+    float render_scale = 1.0f;
 
     parse_result = parse_options(argc, argv, &options);
     if (parse_result < 0) {
@@ -307,13 +555,15 @@ int tc_app_run(int argc, char **argv) {
     world_initialized = 1;
     slot_count = (size_t)world.size * (size_t)world.size;
 
-    tc_world_generate_demo(&world);
+    tc_world_set_seed(&world, options.seed);
+    tc_world_generate_terrain(&world);
 
     if (!tc_player_spawn(&player, &world, spawn_x, spawn_z, 0.0f, -0.12f)) {
         tc_log_error("could not find a spawn surface");
         goto cleanup;
     }
 
+    tc_log_info("world seed: %u", world.seed);
     tc_log_info("streaming world: %d x %d chunks around the player "
                 "(radius %d, %d x %d blocks)",
                 world.size, world.size, world.radius,
@@ -343,6 +593,17 @@ int tc_app_run(int argc, char **argv) {
     }
     renderer_initialized = 1;
 
+    if (options.render_scale > 0.0f) {
+        render_scale = options.render_scale;
+        tc_renderer_set_render_scale(&renderer, render_scale);
+        tc_log_info("render scale: %.2fx", render_scale);
+    } else if (options.vsync) {
+        tc_log_info("render scale: native (adaptive scaling needs vsync off)");
+    } else {
+        tc_log_info("render scale: adaptive, %.1f FPS target",
+                    options.target_fps);
+    }
+
     if (slot_count > SIZE_MAX / sizeof(*render_meshes)) {
         tc_log_error("too many world slots");
         goto cleanup;
@@ -356,11 +617,23 @@ int tc_app_run(int argc, char **argv) {
     }
     memset(render_meshes, 0, slot_count * sizeof(*render_meshes));
 
+    if (slot_count > SIZE_MAX / sizeof(*draw_order)) {
+        tc_log_error("too many draw order entries");
+        goto cleanup;
+    }
+
+    draw_order = tc_arena_alloc(&arena, slot_count * sizeof(*draw_order));
+    if (draw_order == NULL) {
+        tc_log_error("failed to allocate draw order");
+        goto cleanup;
+    }
+
     tc_mesh_init(&mesh);
     mesh_initialized = 1;
 
     if (!rebuild_dirty_chunks(&world, &renderer, &mesh, render_meshes,
-                              &initial_stats, &initial_remeshed,
+                              SIZE_MAX, 0.0, -1, &initial_stats,
+                              &initial_remeshed, &initial_pending,
                               &draw_calls)) {
         tc_log_error("failed to build the initial world meshes");
         goto cleanup;
@@ -402,11 +675,14 @@ int tc_app_run(int argc, char **argv) {
         int captured_before;
         int center_chunk_x;
         int center_chunk_z;
+        int edited = 0;
+        size_t visible_chunks = 0;
         double now;
         double dt;
         float eye[3];
         float forward[3];
         float target[3];
+        float frustum_planes[6][4];
         tc_player_input input = {0.0f, 0.0f, 0, 0};
 
         tc_window_poll();
@@ -495,20 +771,15 @@ int tc_app_run(int argc, char **argv) {
 
         if (center_chunk_x != world.center_chunk_x
             || center_chunk_z != world.center_chunk_z) {
-            tc_mesh_stats stream_stats;
-            size_t stream_remeshed = 0;
             double stream_start = tc_time_now();
 
-            if (!tc_world_update(&world, center_chunk_x, center_chunk_z)
-                || !rebuild_dirty_chunks(&world, &renderer, &mesh,
-                                         render_meshes, &stream_stats,
-                                         &stream_remeshed, &draw_calls)) {
+            if (!tc_world_update(&world, center_chunk_x, center_chunk_z)) {
                 tc_log_error("chunk streaming failed");
                 running = 0;
             } else {
-                tc_log_info("streaming to chunk (%d, %d): %zu chunks "
-                            "remeshed in %.2f ms",
-                            center_chunk_x, center_chunk_z, stream_remeshed,
+                tc_log_info("streaming to chunk (%d, %d): terrain queued "
+                            "in %.2f ms",
+                            center_chunk_x, center_chunk_z,
                             (tc_time_now() - stream_start) * 1000.0);
             }
         }
@@ -526,14 +797,23 @@ int tc_app_run(int argc, char **argv) {
                 tc_raycast_hit hit;
 
                 if (tc_world_raycast(&world, eye, forward, 6.0f, &hit)) {
+                    double remesh_ms = 0.0;
+
                     if (break_clicked) {
-                        if (apply_block_edit(&world, &renderer, &mesh,
-                                             render_meshes, &draw_calls,
-                                             hit.x, hit.y, hit.z,
-                                             TC_BLOCK_AIR)) {
-                            tc_log_info("broke %s at (%d, %d, %d)",
+                        if (hit.block == TC_BLOCK_BEDROCK) {
+                            tc_log_info("bedrock is unbreakable at "
+                                        "(%d, %d, %d)",
+                                        hit.x, hit.y, hit.z);
+                        } else if (apply_block_edit(&world, &renderer,
+                                                    &mesh, render_meshes,
+                                                    &draw_calls, hit.x, hit.y,
+                                                    hit.z, TC_BLOCK_AIR,
+                                                    &remesh_ms)) {
+                            edited = 1;
+                            tc_log_info("broke %s at (%d, %d, %d), "
+                                        "remesh %.2f ms",
                                         block_name(hit.block), hit.x, hit.y,
-                                        hit.z);
+                                        hit.z, remesh_ms);
                         }
                     } else if (!tc_player_intersects_block(&player,
                                                            hit.previous_x,
@@ -550,13 +830,32 @@ int tc_app_run(int argc, char **argv) {
                                              render_meshes, &draw_calls,
                                              hit.previous_x,
                                              hit.previous_y,
-                                             hit.previous_z, block)) {
-                            tc_log_info("placed %s at (%d, %d, %d)",
+                                             hit.previous_z, block,
+                                             &remesh_ms)) {
+                            edited = 1;
+                            tc_log_info("placed %s at (%d, %d, %d), "
+                                        "remesh %.2f ms",
                                         block_name(block), hit.previous_x,
-                                        hit.previous_y, hit.previous_z);
+                                        hit.previous_y, hit.previous_z,
+                                        remesh_ms);
                         }
                     }
                 }
+            }
+        }
+
+        {
+            tc_mesh_stats remesh_stats;
+            size_t remesh_count = 0;
+            size_t remesh_pending = 0;
+            size_t remesh_limit = edited ? 1 : 6;
+
+            if (!rebuild_dirty_chunks(&world, &renderer, &mesh,
+                                      render_meshes, remesh_limit, 3.0, -1,
+                                      &remesh_stats, &remesh_count,
+                                      &remesh_pending, &draw_calls)) {
+                tc_log_error("chunk remeshing failed");
+                running = 0;
             }
         }
 
@@ -564,11 +863,53 @@ int tc_app_run(int argc, char **argv) {
         target[1] = eye[1] + forward[1];
         target[2] = eye[2] + forward[2];
 
+        {
+            const float pi = 3.14159265358979323846f;
+            float projection[16];
+            float view[16];
+            float mvp[16];
+            float up[3] = {0.0f, 1.0f, 0.0f};
+            float aspect = (float)framebuffer_width
+                         / (float)framebuffer_height;
+
+            tc_mat4_perspective(projection,
+                                TC_RENDER_FOV_DEGREES * pi / 180.0f, aspect,
+                                TC_RENDER_NEAR_PLANE,
+                                TC_RENDER_FAR_PLANE);
+            tc_mat4_look_at(view, eye, target, up);
+            tc_mat4_mul(mvp, projection, view);
+            extract_frustum_planes(mvp, frustum_planes);
+        }
+
+        for (size_t index = 0; index < slot_count; index++) {
+            if (render_meshes[index].index_count > 0
+                && chunk_in_frustum(&world, index, &frustum_planes[0][0])) {
+                draw_order[visible_chunks++] = index;
+            }
+        }
+
+        for (size_t index = 1; index < visible_chunks; index++) {
+            size_t item = draw_order[index];
+            size_t position = index;
+
+            while (position > 0
+                   && chunk_distance_sq(&world, item, eye)
+                      < chunk_distance_sq(&world,
+                                          draw_order[position - 1], eye)) {
+                draw_order[position] = draw_order[position - 1];
+                position--;
+            }
+            draw_order[position] = item;
+        }
+
         tc_renderer_begin_frame(&renderer, eye, target, framebuffer_width,
                                 framebuffer_height);
-        for (size_t index = 0; index < slot_count; index++) {
-            tc_renderer_draw_mesh(&renderer, &render_meshes[index]);
+
+        for (size_t index = 0; index < visible_chunks; index++) {
+            tc_renderer_draw_mesh(&renderer,
+                                  &render_meshes[draw_order[index]]);
         }
+        tc_renderer_end_frame(&renderer);
         tc_hud_draw_hotbar(framebuffer_width, framebuffer_height,
                            hud_swatches, HOTBAR_COUNT, selected_hotbar);
         if (captured) {
@@ -590,9 +931,36 @@ int tc_app_run(int argc, char **argv) {
                      hotbar[selected_hotbar].name, fps, framebuffer_width,
                      framebuffer_height);
             tc_window_set_title(&window, title);
-            tc_log_info("%.1f FPS", fps);
+            tc_log_info("%.1f FPS, %zu visible chunks", fps, visible_chunks);
             frames_since_report = 0;
             last_fps_time = now;
+
+            if (options.render_scale <= 0.0f && !options.vsync) {
+                float desired = render_scale
+                              * sqrtf((float)(fps / options.target_fps));
+
+                if (desired < 0.5f) {
+                    desired = 0.5f;
+                } else if (desired > 1.0f) {
+                    desired = 1.0f;
+                }
+
+                if (fabsf(desired - render_scale) > 0.01f) {
+                    int render_width;
+                    int render_height;
+
+                    render_scale = desired;
+                    tc_renderer_set_render_scale(&renderer, render_scale);
+                    render_width = (int)((float)framebuffer_width
+                                         * render_scale + 0.5f);
+                    render_height = (int)((float)framebuffer_height
+                                          * render_scale + 0.5f);
+                    tc_log_info("render scale: %.2f (%dx%d internal, "
+                                "%.1f FPS target)",
+                                render_scale, render_width, render_height,
+                                options.target_fps);
+                }
+            }
         }
 
         if (options.benchmark && now - start_time >= options.benchmark_seconds) {
@@ -609,15 +977,16 @@ int tc_app_run(int argc, char **argv) {
 
     if (options.benchmark) {
         tc_log_info("benchmark: %.2f s, %lld frames, %.1f FPS average, "
-                    "%.3f ms/frame",
+                    "%.3f ms/frame (render scale %.2fx)",
                     total_elapsed, total_frames, average_fps,
                     total_frames > 0
                         ? (total_elapsed * 1000.0 / (double)total_frames)
-                        : 0.0);
+                        : 0.0, render_scale);
         tc_log_info("benchmark complete");
     } else {
-        tc_log_info("session: %.2f s, %lld frames, %.1f FPS average",
-                    total_elapsed, total_frames, average_fps);
+        tc_log_info("session: %.2f s, %lld frames, %.1f FPS average "
+                    "(render scale %.2fx)",
+                    total_elapsed, total_frames, average_fps, render_scale);
     }
 
     exit_code = 0;

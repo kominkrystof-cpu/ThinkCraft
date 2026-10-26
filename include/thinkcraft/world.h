@@ -21,14 +21,16 @@ typedef struct {
     int size;
     int center_chunk_x;
     int center_chunk_z;
-    int generate_demo;
+    int generate_terrain;
+    uint32_t seed;
     tc_world_slot *slots;
 } tc_world;
 
 int tc_world_init(tc_world *world, tc_arena *arena, int radius);
 void tc_world_shutdown(tc_world *world);
 int tc_world_update(tc_world *world, int center_chunk_x, int center_chunk_z);
-void tc_world_generate_demo(tc_world *world);
+void tc_world_set_seed(tc_world *world, uint32_t seed);
+void tc_world_generate_terrain(tc_world *world);
 tc_chunk *tc_world_chunk_at(const tc_world *world, int chunk_x, int chunk_z);
 uint8_t tc_world_get_block(const tc_world *world, int x, int y, int z);
 int tc_world_set_block(tc_world *world, int x, int y, int z, uint8_t block);

@@ -172,6 +172,29 @@ static void generate_sand(uint8_t *pixels) {
     }
 }
 
+static void generate_bedrock(uint8_t *pixels) {
+    for (int y = 0; y < TC_ATLAS_TILE_SIZE; y++) {
+        for (int x = 0; x < TC_ATLAS_TILE_SIZE; x++) {
+            uint32_t noise = hash_pixel(x, y, 97u);
+            int red = vary_channel(54, noise, 12);
+            int green = vary_channel(54, noise >> 8, 12);
+            int blue = vary_channel(58, noise >> 16, 12);
+
+            if (noise % 11u == 0) {
+                red -= 22;
+                green -= 22;
+                blue -= 20;
+            } else if (noise % 23u == 0) {
+                red += 24;
+                green += 24;
+                blue += 22;
+            }
+
+            put_pixel(pixels, TC_TILE_BEDROCK, x, y, red, green, blue);
+        }
+    }
+}
+
 void tc_texture_generate_atlas(uint8_t *pixels) {
     if (pixels == NULL) {
         return;
@@ -183,4 +206,5 @@ void tc_texture_generate_atlas(uint8_t *pixels) {
     generate_dirt(pixels);
     generate_stone(pixels);
     generate_sand(pixels);
+    generate_bedrock(pixels);
 }

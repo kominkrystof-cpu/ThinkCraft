@@ -55,6 +55,7 @@ ENGINE_C_SRCS := \
 	src/world/chunk.c \
 	src/world/chunk_mesh.c \
 	src/world/raycast.c \
+	src/world/terrain.c \
 	src/world/world.c \
 	third_party/glad/src/gl.c
 
@@ -73,6 +74,7 @@ TEST_CHUNK_OBJS := \
 	$(BUILD)/tests/obj/tests/test_chunk_mesh.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/terrain.o \
 	$(BUILD)/tests/obj/src/gfx/mesh.o \
 	$(BUILD)/tests/obj/src/core/arena.o \
 	$(BUILD)/tests/obj/src/core/log.o \
@@ -84,6 +86,7 @@ TEST_WORLD_OBJS := \
 	$(BUILD)/tests/obj/src/world/world.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/terrain.o \
 	$(BUILD)/tests/obj/src/gfx/mesh.o \
 	$(BUILD)/tests/obj/src/core/arena.o \
 	$(BUILD)/tests/obj/src/core/log.o \
@@ -98,6 +101,7 @@ TEST_PLAYER_OBJS := \
 	$(BUILD)/tests/obj/src/world/world.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/terrain.o \
 	$(BUILD)/tests/obj/src/gfx/mesh.o \
 	$(BUILD)/tests/obj/src/core/arena.o \
 	$(BUILD)/tests/obj/src/core/log.o \
@@ -116,6 +120,7 @@ TEST_RAYCAST_OBJS := \
 	$(BUILD)/tests/obj/src/world/world.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/terrain.o \
 	$(BUILD)/tests/obj/src/gfx/mesh.o \
 	$(BUILD)/tests/obj/src/core/arena.o \
 	$(BUILD)/tests/obj/src/core/log.o \

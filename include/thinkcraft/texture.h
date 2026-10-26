@@ -14,6 +14,7 @@ typedef enum {
     TC_TILE_DIRT,
     TC_TILE_STONE,
     TC_TILE_SAND,
+    TC_TILE_BEDROCK,
     TC_TILE_COUNT
 } tc_atlas_tile;
 

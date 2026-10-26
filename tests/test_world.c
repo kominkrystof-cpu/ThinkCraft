@@ -2,6 +2,7 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/mesh.h"
+#include "thinkcraft/terrain.h"
 #include "thinkcraft/texture.h"
 #include "thinkcraft/world.h"
 
@@ -252,7 +253,7 @@ static int test_generated_world(void) {
         return 0;
     }
 
-    tc_world_generate_demo(&world);
+    tc_world_generate_terrain(&world);
 
     for (int index = 0; index < world.size * world.size; index++) {
         const tc_chunk *chunk = &world.slots[index].chunk;
@@ -308,6 +309,116 @@ static int test_generated_world(void) {
     return ok;
 }
 
+
+static uint32_t digest_chunk(const tc_chunk *chunk) {
+    uint32_t digest = 2166136261u;
+
+    for (size_t index = 0; index < TC_CHUNK_BLOCK_COUNT; index++) {
+        digest ^= chunk->blocks[index];
+        digest *= 16777619u;
+    }
+
+    return digest;
+}
+
+static int test_seeded_terrain(void) {
+    tc_arena arena;
+    tc_world world;
+    const tc_chunk *center;
+    uint32_t first_digest;
+    uint32_t second_digest;
+    uint32_t repeat_digest;
+    size_t cave_blocks = 0;
+    size_t surface_holes = 0;
+    size_t bedrock_errors = 0;
+    int ok = 1;
+
+    if (!tc_arena_init(&arena, 4 * 1024 * 1024)) {
+        return 0;
+    }
+
+    if (!tc_world_init(&world, &arena, 1)) {
+        tc_arena_shutdown(&arena);
+        return 0;
+    }
+
+    tc_world_set_seed(&world, 0x13579bdfu);
+    tc_world_generate_terrain(&world);
+
+    center = tc_world_chunk_at(&world, 0, 0);
+    ok = ok && check(center != NULL, "seeded center chunk missing");
+    first_digest = digest_chunk(center);
+
+    for (int index = 0; index < world.size * world.size; index++) {
+        const tc_world_slot *slot = &world.slots[index];
+
+        if (!slot->loaded) {
+            continue;
+        }
+
+        for (int z = 0; z < TC_CHUNK_SIZE_Z; z++) {
+            for (int x = 0; x < TC_CHUNK_SIZE_X; x++) {
+                int world_x = slot->chunk.origin_x + x;
+                int world_z = slot->chunk.origin_z + z;
+                int height = tc_terrain_height(world_x, world_z, world.seed);
+
+                if (!tc_block_is_solid(
+                        tc_world_get_block(&world, world_x, height, world_z))
+                    || tc_world_get_block(&world, world_x, height + 1,
+                                          world_z) != TC_BLOCK_AIR) {
+                    surface_holes++;
+                }
+
+                for (int y = 0; y < TC_WORLD_BEDROCK_LAYERS; y++) {
+                    if (tc_world_get_block(&world, world_x, y, world_z)
+                        != TC_BLOCK_BEDROCK) {
+                        bedrock_errors++;
+                    }
+                }
+
+                for (int y = 3; y <= height - 4; y++) {
+                    if (tc_world_get_block(&world, world_x, y, world_z)
+                        == TC_BLOCK_AIR) {
+                        cave_blocks++;
+                    }
+                }
+            }
+        }
+    }
+
+    ok = ok && check(surface_holes == 0, "cave breached the surface")
+      && check(cave_blocks > 0, "seeded terrain has no caves")
+      && check(bedrock_errors == 0, "generated floor is not bedrock")
+      && check(tc_world_set_block(&world, 0, 0, 0, TC_BLOCK_AIR) == 0,
+               "bedrock was breakable")
+      && check(tc_world_get_block(&world, 0, 0, 0) == TC_BLOCK_BEDROCK,
+               "bedrock was removed")
+      && check(tc_world_set_block(&world, 0, 0, 0, TC_BLOCK_DIRT) == 0,
+               "bedrock was replaceable")
+      && check(tc_world_get_block(&world, 0, 0, 0) == TC_BLOCK_BEDROCK,
+               "bedrock was replaced");
+
+    tc_world_set_seed(&world, 0x2468ace0u);
+    tc_world_generate_terrain(&world);
+    second_digest = digest_chunk(tc_world_chunk_at(&world, 0, 0));
+    ok = ok && check(first_digest != second_digest,
+                     "different seeds produced identical terrain");
+
+    tc_world_set_seed(&world, 0x13579bdfu);
+    tc_world_generate_terrain(&world);
+    repeat_digest = digest_chunk(tc_world_chunk_at(&world, 0, 0));
+    ok = ok && check(first_digest == repeat_digest,
+                     "same seed was not deterministic");
+
+    printf("seeded terrain: digest %08x, %zu cave blocks, "
+           "%zu surface holes, %zu bedrock errors\n",
+           first_digest, cave_blocks, surface_holes, bedrock_errors);
+
+    tc_world_shutdown(&world);
+    tc_arena_shutdown(&arena);
+    return ok;
+}
+
 int main(void) {
     int ok = 1;
 
@@ -315,6 +426,7 @@ int main(void) {
     ok = ok && test_streaming_update();
     ok = ok && test_boundary_mesh();
     ok = ok && test_generated_world();
+    ok = ok && test_seeded_terrain();
 
     if (!ok) {
         return 1;

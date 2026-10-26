@@ -1,6 +1,7 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/mesh.h"
+#include "thinkcraft/terrain.h"
 #include "thinkcraft/texture.h"
 
 #include <stdio.h>
@@ -203,9 +204,20 @@ static int test_face_tiles(void) {
         }
     }
 
+    tc_chunk_clear(chunk);
+    tc_chunk_set(chunk, 4, 4, 4, TC_BLOCK_BEDROCK);
+    ok = ok && check(tc_chunk_build_mesh(chunk, &mesh, &stats),
+                     "bedrock tile mesh build failed");
+    for (size_t quad = 0; quad < mesh.quad_count; quad++) {
+        if (!check(mesh.vertices[quad * 4].tile == TC_TILE_BEDROCK,
+                   "bedrock did not use the bedrock tile")) {
+            ok = 0;
+        }
+    }
+
     if (ok) {
-        printf("face tiles: grass top/side/bottom, sand, and stone mapping "
-               "passed\n");
+        printf("face tiles: grass top/side/bottom, sand, stone, and bedrock "
+               "mapping passed\n");
     }
 
     tc_mesh_shutdown(&mesh);
@@ -213,7 +225,7 @@ static int test_face_tiles(void) {
     return ok;
 }
 
-static int test_demo_mesh(void) {
+static int test_generated_mesh(void) {
     tc_chunk *chunk = malloc(sizeof(*chunk));
     tc_mesh mesh;
     tc_mesh_stats stats;
@@ -224,25 +236,25 @@ static int test_demo_mesh(void) {
     }
 
     tc_chunk_init(chunk, 0, 0, 0);
-    tc_chunk_generate_demo(chunk);
+    tc_chunk_generate(chunk, TC_TERRAIN_DEFAULT_SEED);
 
     tc_mesh_init(&mesh);
     ok = ok && check(tc_chunk_build_mesh(chunk, &mesh, &stats),
-                     "demo mesh build failed");
+                     "generated mesh build failed");
     ok = ok && check(stats.solid_blocks == chunk->solid_count,
-                     "demo solid count mismatch");
+                     "generated solid count mismatch");
     ok = ok && check(stats.solid_blocks
                          == tc_chunk_count_solid(chunk->blocks,
                                                  TC_CHUNK_BLOCK_COUNT),
-                     "demo asm solid count mismatch");
-    ok = ok && check(stats.quads > 0, "demo mesh is empty");
+                     "generated asm solid count mismatch");
+    ok = ok && check(stats.quads > 0, "generated mesh is empty");
     ok = ok && check(stats.quads < stats.visible_faces,
                      "greedy meshing did not reduce faces");
     ok = ok && check(mesh.quad_count == stats.quads,
-                     "demo stats quad mismatch after build");
+                     "generated stats quad mismatch after build");
     ok = ok && validate_mesh(&mesh, stats.quads);
 
-    printf("demo chunk: %zu solid blocks, %zu faces -> %zu quads "
+    printf("generated chunk: %zu solid blocks, %zu faces -> %zu quads "
            "(%.2fx reduction), %.3f ms build\n",
            stats.solid_blocks, stats.visible_faces, stats.quads,
            stats.quads > 0
@@ -268,7 +280,7 @@ static int test_mesh_performance(void) {
     }
 
     tc_chunk_init(chunk, 0, 0, 0);
-    tc_chunk_generate_demo(chunk);
+    tc_chunk_generate(chunk, TC_TERRAIN_DEFAULT_SEED);
     tc_mesh_init(&mesh);
 
     for (int i = 0; i < iterations; i++) {
@@ -300,7 +312,7 @@ int main(void) {
     ok = ok && test_chunk_access();
     ok = ok && test_greedy_cases();
     ok = ok && test_face_tiles();
-    ok = ok && test_demo_mesh();
+    ok = ok && test_generated_mesh();
     ok = ok && test_mesh_performance();
 
     if (!ok) {

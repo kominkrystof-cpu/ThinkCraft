@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates deterministic terrain, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, block breaking and placing, and distance fog.
+The project is currently an engine foundation with a playable first-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring of 16x256x16 voxel chunks around the player, generates seeded procedural terrain with caves, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a first-person controller, block breaking and placing, an unbreakable bedrock floor, and distance fog.
 
 ## Status
 
@@ -13,7 +13,7 @@ The project is currently an engine foundation with a playable first-person demo,
 - Target hardware: Intel UHD 620 / i3-10110U-class laptops
 - Target: stable 100 FPS at 1280x720
 
-The current streaming-world benchmark runs at roughly 1,400 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. It renders a 9x9 ring around the player, remeshes boundary chunks when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
+The current streaming-world benchmark runs at roughly 1,100 FPS on the development Intel UHD 620 machine at 1280x720 with vsync disabled. It renders a 9x9 ring around the player, frustum-culls to roughly 33 visible chunks per frame, draws visible chunks front-to-back, spreads boundary remeshing across frames when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
 
 ## Current Milestone
 
@@ -24,22 +24,26 @@ The current streaming-world benchmark runs at roughly 1,400 FPS on the developme
 - Depth testing, back-face culling, and softened distance fog (48 to 80 blocks)
 - 16x256x16 chunk storage with inline bounds-checked block access
 - Dynamic 9x9 chunk streaming ring around the player
-- Deterministic demo terrain independent of streaming history
+- Seeded 2D value-noise terrain independent of streaming history
+- 3D noise caves carved beneath the surface with no surface breaches
 - Negative world and chunk coordinates through floor division
 - Automatic load/unload of chunk rows and columns as the player moves
-- Dirty-slot remeshing with neighbor updates across chunk borders
+- Budgeted dirty-slot remeshing with priority edits and deferred neighbor updates
 - Neighbor-aware greedy meshing across all three axes with internal-face culling
-- Initial world reduced from 54,386 visible faces to 7,287 quads (7.46x)
+- Initial world reduced from 94,178 visible faces to 17,199 quads (5.48x)
 - 81 per-chunk textured meshes uploaded to VBOs and EBOs
-- Procedural 64x64 RGBA texture atlas with a 4x4 grid of 16x16 tiles
-- Textured grass, dirt, stone, and sand with per-face shading
+- Frustum culling and front-to-back chunk drawing (roughly 33 of 81 chunks visible at spawn)
+- Procedural 64x64 RGBA texture atlas uploaded as a 16-layer 2D texture array
+- Textured grass, dirt, stone, sand, and bedrock with per-face shading
+- Per-vertex distance fog and optional internal render scaling
 - Repeating tile-local UVs on greedy-merged quads
 - First-person WASD controller with mouse look and Ctrl sprint
 - DDA voxel picking with a six-block reach
-- Left/right click block breaking and placing with immediate remeshing
+- Left/right click block breaking and placing with priority remeshing
 - Four-slot hotbar with 1-4 selection, crosshair, and placement collision checks
 - Gravity, jumping, AABB voxel collision, one-block auto-step, and surface spawning
-- Procedural stone, grass, dirt, and sand demo terrain
+- Unbreakable bedrock floor at y=0 and a hard void-floor collision clamp
+- Procedural stone, grass, dirt, and sand terrain with seeded hills, sand patches, stone peaks, and caves
 - Arena allocator for startup allocations
 - 4x4 matrix math in C, including `look_at`
 - `tc_mat4_mul` implemented in x86-64 NASM
@@ -47,8 +51,10 @@ The current streaming-world benchmark runs at roughly 1,400 FPS on the developme
 - Frame-time and FPS reporting
 - Automated render benchmark and mesh benchmark output
 - Chunk, world, player, texture, raycast, and mesh tests covering boundary
-  culling, streaming, generation determinism, negative coordinates, collision,
-  jumping, look limits, atlas tile data, voxel picking, and placement overlap
+  culling, streaming, generation determinism, seed stability, cave
+  generation, bedrock protection, void-floor collision, negative
+  coordinates, collision, jumping, look limits, atlas tile data, voxel
+  picking, and placement overlap
 
 ## Requirements
 
@@ -118,7 +124,7 @@ Ctrl          sprint
 Escape        release the mouse; press again to close the window
 ```
 
-The world streams around the player. At startup the engine prints the streaming-ring dimensions, solid block count, visible face count, greedy quad count, reduction factor, mesh build time, and draw-call count. When the player crosses a chunk boundary, the console reports how many chunks were remeshed and how long the update took.
+The world streams around the player. At startup the engine prints the seed, streaming-ring dimensions, solid block count, visible face count, greedy quad count, reduction factor, mesh build time, and draw-call count. When the player crosses a chunk boundary, terrain generation is queued and remeshing is spread across frames under a small time budget. Block edits rebuild the touched chunk first and defer neighbor updates by a frame.
 
 Command-line options:
 
@@ -129,6 +135,9 @@ Command-line options:
 --no-vsync      disable vertical sync
 --benchmark     exit after the benchmark duration
 --seconds N     benchmark duration in seconds
+--seed N        terrain seed (default 0x5eed1234)
+--render-scale N  internal render scale 0.5-1.0 (default 1.0, 0 = adaptive)
+--target-fps N  adaptive render-scale FPS target (default 500)
 --help          show help
 ```
 
@@ -152,7 +161,7 @@ Example with a custom resolution:
 ./build/engine/thinkcraft --width 1920 --height 1080 --benchmark --seconds 10
 ```
 
-The benchmark prints the elapsed time, total frames, average FPS, and average milliseconds per frame.
+The benchmark prints the elapsed time, total frames, average FPS, average milliseconds per frame, and the final render scale.
 
 ## Tests
 
@@ -173,7 +182,7 @@ make test-texture
 make test-raycast
 ```
 
-The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, and sand palettes. The raycast test covers forward and negative-coordinate voxel hits, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected.
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic terrain reloads, world-space block access, generation, seed stability, cave generation, per-chunk rendering bounds, and neighbor-aware boundary culling. The player test covers gravity, ground contact, jumping, wall collision, void-floor collision, surface spawning, pitch clamping, and yaw wrapping. The texture test verifies atlas layout, tile variation, opaque pixels, and the expected grass, dirt, stone, sand, and bedrock palettes. The raycast test covers forward and negative-coordinate voxel hits, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected. The world test regenerates terrain under different seeds, checks cave placement without surface breaches, and verifies that the bedrock floor cannot be broken or replaced.
 
 To run the math, chunk, world, player, texture, raycast, and optional transpiler tests:
 
@@ -220,21 +229,22 @@ scripts/                Development helper scripts
 - Keep the engine runtime free of Java and JVM dependencies.
 - Prefer explicit ownership and deterministic cleanup over hidden global state.
 - Make performance decisions measurable with a repeatable benchmark.
+- Keep the high-resolution path fillrate-aware and avoid unnecessary overdraw.
 - Keep the dependency surface small and document every external component.
 - Never ship copyrighted Minecraft assets or Mojang code.
 
 ## Performance Notes
 
-The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, one indexed draw per chunk, a nearest-filtered procedural atlas, a direct-mapped 9x9 streaming ring, and dirty-only remeshing after block edits. Important planned work includes:
+The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, frustum-culled front-to-back chunk drawing, one indexed draw per visible chunk, a nearest-filtered 2D texture array, per-vertex fog, a direct-mapped 9x9 streaming ring, reusable GPU buffers, priority remeshing after block edits, and a per-frame remesh budget. Important planned work includes:
 
-- Frustum culling
-- Chunk visibility scheduling
-- Spreading or offloading boundary remeshing to avoid transition spikes
+- Chunk visibility scheduling and occlusion culling
+- Batching visible chunks into fewer draw calls
+- Offloading mesh generation to worker threads
 - Multithreaded mesh generation
 - Avoiding per-frame allocation and unnecessary copying
 - Native assembly paths only for verified hotspots
 
-The current benchmark renders 81 chunks around the player. At startup the streaming ring has 275,584 solid blocks and 54,386 visible faces reduced to 7,287 quads; initial mesh building takes roughly 33 ms total on the development machine. Crossing a chunk boundary remeshes about 27 chunks, including new edge chunks and their affected neighbors, in roughly 25 to 40 ms. Rendering averages roughly 1,400 FPS at 1280x720.
+The current benchmark streams 81 chunks around the player and renders roughly 33 after frustum culling. At startup the streaming ring has 439,539 solid blocks and 94,178 visible faces reduced to 17,199 quads; initial mesh building takes roughly 53 ms total on the development machine. Crossing a chunk boundary generates about 27 new chunks in roughly 7 ms and queues their remeshes under a 3 ms per-frame budget. A block edit rebuilds its chunk immediately in roughly 1 to 3 ms, while border neighbors are deferred to the next frames. Rendering averages roughly 1,100 FPS at 1280x720, 1,900 FPS at 800x450, and 580 FPS at 1920x1044 on the development machine. High-resolution performance is dominated by final framebuffer fill; optional internal render scaling is available, but the full-resolution upscale still writes every output pixel, so it is not a substitute for reducing overdraw.
 
 ## Optional Transpiler Experiment
 
@@ -275,13 +285,16 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] Multiple chunks and neighbor-aware meshing
 - [x] Per-face block shading
 - [x] Procedural CC0 texture atlas
-- [x] Deterministic demo terrain across a chunk grid
+- [x] Seeded procedural terrain across a chunk grid
+- [x] Procedural cave generation
 - [x] Dynamic chunk loading and unloading
 - [x] Player controller and collision
+- [x] Bedrock floor and void safety
 - [x] Block picking, breaking, and placing
-- [ ] Full world generation and biomes
+- [x] Frustum culling and front-to-back chunk drawing
+- [ ] Biomes and structures
 - [ ] Save and load format
-- [ ] Frustum culling and chunk scheduling
+- [ ] Chunk visibility scheduling
 - [ ] Multithreaded mesh building
 - [ ] Portable release packaging
 - [ ] Windows build investigation

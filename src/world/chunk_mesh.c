@@ -40,6 +40,9 @@ static uint8_t block_face_tile(uint8_t block, int axis, int positive) {
     if (block == TC_BLOCK_SAND) {
         return TC_TILE_SAND;
     }
+    if (block == TC_BLOCK_BEDROCK) {
+        return TC_TILE_BEDROCK;
+    }
     return TC_TILE_STONE;
 }
 

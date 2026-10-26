@@ -42,7 +42,7 @@ void tc_chunk_init(tc_chunk *chunk, int32_t origin_x, int32_t origin_y,
                    int32_t origin_z);
 void tc_chunk_clear(tc_chunk *chunk);
 int tc_chunk_set(tc_chunk *chunk, int x, int y, int z, uint8_t block);
-void tc_chunk_generate_demo(tc_chunk *chunk);
+void tc_chunk_generate(tc_chunk *chunk, uint32_t seed);
 uint32_t tc_chunk_visible_face_count(const tc_chunk *chunk);
 uint32_t tc_chunk_visible_face_count_sampled(const tc_chunk *chunk,
                                               tc_block_sampler sampler,

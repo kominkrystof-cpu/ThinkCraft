@@ -1,81 +1,14 @@
 #include "thinkcraft/world.h"
 #include "thinkcraft/math.h"
+#include "thinkcraft/terrain.h"
 
 #include <limits.h>
-#include <math.h>
 #include <string.h>
 
 typedef struct {
     const tc_world *world;
     const tc_chunk *chunk;
 } world_sample_context;
-
-static int terrain_height(int x, int z) {
-    float wave = 2.2f * sinf((float)x * 0.13f)
-               + 1.8f * cosf((float)z * 0.11f)
-               + 1.0f * sinf((float)(x + z) * 0.07f);
-    int delta_x = x - 8;
-    int delta_z = z - 8;
-    int distance_squared = delta_x * delta_x + delta_z * delta_z;
-    int height = 12 + (int)wave;
-
-    if (distance_squared < 225) {
-        int hill = 6 - distance_squared / 45;
-        if (hill > 0) {
-            height += hill;
-        }
-    }
-
-    if (height < 7) {
-        height = 7;
-    }
-    if (height > 26) {
-        height = 26;
-    }
-
-    return height;
-}
-
-static void generate_chunk_demo(tc_chunk *chunk) {
-    tc_chunk_clear(chunk);
-
-    for (int z = 0; z < TC_CHUNK_SIZE_Z; z++) {
-        for (int x = 0; x < TC_CHUNK_SIZE_X; x++) {
-            int world_x = chunk->origin_x + x;
-            int world_z = chunk->origin_z + z;
-            int height = terrain_height(world_x, world_z);
-            uint8_t top = TC_BLOCK_GRASS;
-
-            if (height >= 23) {
-                top = TC_BLOCK_STONE;
-            } else if (world_x >= -8 && world_x < 4
-                       && world_z >= -8 && world_z < 4) {
-                top = TC_BLOCK_SAND;
-            }
-
-            for (int y = 0; y <= height; y++) {
-                uint8_t block;
-
-                if (y == height) {
-                    block = top;
-                } else if (top == TC_BLOCK_STONE) {
-                    block = TC_BLOCK_STONE;
-                } else if (top == TC_BLOCK_SAND && y >= height - 2) {
-                    block = TC_BLOCK_SAND;
-                } else if (y >= height - 3) {
-                    block = TC_BLOCK_DIRT;
-                } else {
-                    block = TC_BLOCK_STONE;
-                }
-
-                tc_chunk_set(chunk, x, y, z, block);
-            }
-        }
-    }
-
-    chunk->solid_count = tc_chunk_count_solid(chunk->blocks,
-                                              TC_CHUNK_BLOCK_COUNT);
-}
 
 static size_t slot_index(const tc_world *world, int chunk_x, int chunk_z) {
     int x = tc_math_floor_mod(chunk_x, world->size);
@@ -153,6 +86,7 @@ int tc_world_init(tc_world *world, tc_arena *arena, int radius) {
     memset(world, 0, sizeof(*world));
     world->radius = radius;
     world->size = size;
+    world->seed = TC_TERRAIN_DEFAULT_SEED;
     world->slots = tc_arena_alloc(arena, bytes);
     if (world->slots == NULL) {
         return 0;
@@ -224,8 +158,8 @@ int tc_world_update(tc_world *world, int center_chunk_x, int center_chunk_z) {
             slot->loaded = 1;
             slot->dirty = 1;
 
-            if (world->generate_demo) {
-                generate_chunk_demo(&slot->chunk);
+            if (world->generate_terrain) {
+                tc_chunk_generate(&slot->chunk, world->seed);
             }
 
             mark_neighbor_chunks_dirty(world, chunk_x, chunk_z);
@@ -284,6 +218,11 @@ int tc_world_set_block(tc_world *world, int x, int y, int z, uint8_t block) {
         return 0;
     }
 
+    if (tc_chunk_get(chunk, local_x, y, local_z) == TC_BLOCK_BEDROCK
+        && block != TC_BLOCK_BEDROCK) {
+        return 0;
+    }
+
     if (!tc_chunk_set(chunk, local_x, y, local_z, block)) {
         return 0;
     }
@@ -309,12 +248,33 @@ int tc_world_set_block(tc_world *world, int x, int y, int z, uint8_t block) {
     return 1;
 }
 
-void tc_world_generate_demo(tc_world *world) {
+void tc_world_set_seed(tc_world *world, uint32_t seed) {
+    if (world == NULL) {
+        return;
+    }
+
+    world->seed = seed;
+
+    if (world->generate_terrain) {
+        for (int index = 0; index < world->size * world->size; index++) {
+            tc_world_slot *slot = &world->slots[index];
+
+            if (!slot->loaded) {
+                continue;
+            }
+
+            tc_chunk_generate(&slot->chunk, world->seed);
+            slot->dirty = 1;
+        }
+    }
+}
+
+void tc_world_generate_terrain(tc_world *world) {
     if (world == NULL || world->slots == NULL) {
         return;
     }
 
-    world->generate_demo = 1;
+    world->generate_terrain = 1;
 
     for (int index = 0; index < world->size * world->size; index++) {
         tc_world_slot *slot = &world->slots[index];
@@ -323,7 +283,7 @@ void tc_world_generate_demo(tc_world *world) {
             continue;
         }
 
-        generate_chunk_demo(&slot->chunk);
+        tc_chunk_generate(&slot->chunk, world->seed);
         slot->dirty = 1;
     }
 }

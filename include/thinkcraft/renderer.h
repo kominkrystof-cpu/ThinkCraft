@@ -5,11 +5,17 @@
 #include "thinkcraft/mesh.h"
 #include "thinkcraft/shader.h"
 
+#define TC_RENDER_FOV_DEGREES 60.0f
+#define TC_RENDER_NEAR_PLANE 0.1f
+#define TC_RENDER_FAR_PLANE 256.0f
+
 typedef struct {
     unsigned int vao;
     unsigned int vbo;
     unsigned int ebo;
     unsigned int index_count;
+    size_t vbo_capacity;
+    size_t ebo_capacity;
 } tc_render_mesh;
 
 typedef struct {
@@ -21,16 +27,27 @@ typedef struct {
     int u_fog_color;
     int u_fog_start;
     int u_fog_end;
+    unsigned int scene_fbo;
+    unsigned int scene_color;
+    unsigned int scene_depth;
+    int scene_width;
+    int scene_height;
+    int window_width;
+    int window_height;
+    int use_scene_fbo;
+    float render_scale;
 } tc_renderer;
 
 int tc_renderer_init(tc_renderer *renderer, tc_arena *arena, const char *shader_dir);
 int tc_renderer_upload_mesh(tc_renderer *renderer, tc_render_mesh *target,
                             const tc_mesh *mesh);
 void tc_renderer_destroy_mesh(tc_render_mesh *mesh);
+void tc_renderer_set_render_scale(tc_renderer *renderer, float scale);
 void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
                              const float target[3], int framebuffer_width,
                              int framebuffer_height);
 void tc_renderer_draw_mesh(tc_renderer *renderer, const tc_render_mesh *mesh);
+void tc_renderer_end_frame(tc_renderer *renderer);
 void tc_renderer_shutdown(tc_renderer *renderer);
 
 #endif
