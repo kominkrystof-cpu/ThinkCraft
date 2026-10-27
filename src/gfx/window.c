@@ -36,10 +36,27 @@ static int map_key(int key) {
             return TC_KEY_UP;
         case GLFW_KEY_DOWN:
             return TC_KEY_DOWN;
+        case GLFW_KEY_F3:
+            return TC_KEY_F3;
+        case GLFW_KEY_F4:
+            return TC_KEY_F4;
         case GLFW_KEY_F5:
             return TC_KEY_F5;
+        case GLFW_KEY_F6:
+            return TC_KEY_F6;
         case GLFW_KEY_F9:
             return TC_KEY_F9;
+        case GLFW_KEY_E:
+            return TC_KEY_E;
+        case GLFW_KEY_LEFT_SHIFT:
+        case GLFW_KEY_RIGHT_SHIFT:
+            return TC_KEY_SHIFT;
+        case GLFW_KEY_TAB:
+            return TC_KEY_TAB;
+        case GLFW_KEY_LEFT:
+            return TC_KEY_LEFT;
+        case GLFW_KEY_RIGHT:
+            return TC_KEY_RIGHT;
         case GLFW_KEY_1:
             return TC_KEY_1;
         case GLFW_KEY_2:
@@ -48,6 +65,16 @@ static int map_key(int key) {
             return TC_KEY_3;
         case GLFW_KEY_4:
             return TC_KEY_4;
+        case GLFW_KEY_5:
+            return TC_KEY_5;
+        case GLFW_KEY_6:
+            return TC_KEY_6;
+        case GLFW_KEY_7:
+            return TC_KEY_7;
+        case GLFW_KEY_8:
+            return TC_KEY_8;
+        case GLFW_KEY_9:
+            return TC_KEY_9;
         default:
             return -1;
     }
@@ -102,7 +129,14 @@ static void cursor_callback(GLFWwindow *handle, double x, double y) {
     tc_window *window = glfwGetWindowUserPointer(handle);
     double now;
 
-    if (window == NULL || !window->mouse_captured) {
+    if (window == NULL) {
+        return;
+    }
+
+    window->cursor_x = (float)x;
+    window->cursor_y = (float)y;
+
+    if (!window->mouse_captured) {
         return;
     }
 
@@ -126,6 +160,17 @@ static void cursor_callback(GLFWwindow *handle, double x, double y) {
     }
     window->last_cursor_x = x;
     window->last_cursor_y = y;
+}
+
+static void scroll_callback(GLFWwindow *handle, double xoffset, double yoffset) {
+    tc_window *window = glfwGetWindowUserPointer(handle);
+
+    if (window == NULL) {
+        return;
+    }
+
+    window->scroll_x += (float)xoffset;
+    window->scroll_y += (float)yoffset;
 }
 
 int tc_window_create(tc_window *window, int width, int height, int vsync, const char *title) {
@@ -162,6 +207,7 @@ int tc_window_create(tc_window *window, int width, int height, int vsync, const 
     glfwSetKeyCallback(window->handle, key_callback);
     glfwSetMouseButtonCallback(window->handle, mouse_button_callback);
     glfwSetCursorPosCallback(window->handle, cursor_callback);
+    glfwSetScrollCallback(window->handle, scroll_callback);
 
     if (!gladLoadGL((GLADloadfunc)glfwGetProcAddress)) {
         tc_log_error("failed to load OpenGL functions with Glad");
@@ -213,6 +259,8 @@ void tc_window_end_frame(tc_window *window) {
     memset(window->mouse_pressed, 0, sizeof(window->mouse_pressed));
     window->mouse_dx = 0.0f;
     window->mouse_dy = 0.0f;
+    window->scroll_x = 0.0f;
+    window->scroll_y = 0.0f;
 }
 
 void tc_window_swap(const tc_window *window) {
@@ -290,6 +338,14 @@ void tc_window_set_mouse_captured(tc_window *window, int captured) {
         glfwSetInputMode(window->handle, GLFW_RAW_MOUSE_MOTION,
                          captured ? GLFW_TRUE : GLFW_FALSE);
     }
+    if (!captured) {
+        double cursor_x;
+        double cursor_y;
+
+        glfwGetCursorPos(window->handle, &cursor_x, &cursor_y);
+        window->cursor_x = (float)cursor_x;
+        window->cursor_y = (float)cursor_y;
+    }
 }
 
 int tc_window_mouse_captured(const tc_window *window) {
@@ -317,4 +373,44 @@ void tc_window_consume_mouse_delta(tc_window *window, float *dx, float *dy) {
 
     window->mouse_dx = 0.0f;
     window->mouse_dy = 0.0f;
+}
+
+void tc_window_cursor_position(const tc_window *window, float *x, float *y) {
+    if (x != NULL) {
+        *x = window != NULL ? window->cursor_x : 0.0f;
+    }
+    if (y != NULL) {
+        *y = window != NULL ? window->cursor_y : 0.0f;
+    }
+}
+
+void tc_window_consume_scroll(tc_window *window, float *x, float *y) {
+    if (x != NULL) {
+        *x = 0.0f;
+    }
+    if (y != NULL) {
+        *y = 0.0f;
+    }
+
+    if (window == NULL) {
+        return;
+    }
+
+    if (x != NULL) {
+        *x = window->scroll_x;
+    }
+    if (y != NULL) {
+        *y = window->scroll_y;
+    }
+
+    window->scroll_x = 0.0f;
+    window->scroll_y = 0.0f;
+}
+
+void tc_window_set_vsync(tc_window *window, int vsync) {
+    if (window == NULL || window->handle == NULL) {
+        return;
+    }
+
+    glfwSwapInterval(vsync ? 1 : 0);
 }

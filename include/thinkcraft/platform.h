@@ -9,5 +9,6 @@ int tc_path_exists(const char *path);
 char *tc_read_text_file(const char *path, tc_arena *arena);
 double tc_time_now(void);
 void tc_sleep_ms(double milliseconds);
+long long tc_platform_rss_bytes(void);
 
 #endif

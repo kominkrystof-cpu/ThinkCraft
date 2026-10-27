@@ -55,14 +55,15 @@ static void create_atlas_texture(unsigned int *texture) {
 static void configure_mesh(tc_render_mesh *mesh) {
     glBindVertexArray(mesh->vao);
     glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(tc_vertex),
+    glVertexAttribPointer(0, 3, GL_UNSIGNED_SHORT, GL_FALSE,
+                          sizeof(tc_vertex),
                           (void *)(uintptr_t)offsetof(tc_vertex, position));
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(tc_vertex),
+    glVertexAttribPointer(1, 2, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(tc_vertex),
                           (void *)(uintptr_t)offsetof(tc_vertex, uv));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 3, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(tc_vertex),
-                          (void *)(uintptr_t)offsetof(tc_vertex, color));
+    glVertexAttribPointer(2, 1, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(tc_vertex),
+                          (void *)(uintptr_t)offsetof(tc_vertex, shade));
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(tc_vertex),
                           (void *)(uintptr_t)offsetof(tc_vertex, tile));
@@ -144,6 +145,8 @@ int tc_renderer_init(tc_renderer *renderer, tc_arena *arena,
 
     memset(renderer, 0, sizeof(*renderer));
     renderer->render_scale = 1.0f;
+    renderer->fog_start = TC_RENDER_FOG_START;
+    renderer->fog_end = TC_RENDER_FOG_END;
 
     snprintf(vertex_path, sizeof(vertex_path), "%s/basic.vert", shader_dir);
     snprintf(fragment_path, sizeof(fragment_path), "%s/basic.frag", shader_dir);
@@ -156,15 +159,40 @@ int tc_renderer_init(tc_renderer *renderer, tc_arena *arena,
     renderer->u_texture = tc_shader_uniform(&renderer->shader, "u_texture");
     renderer->u_camera_pos = tc_shader_uniform(&renderer->shader,
                                                "u_camera_pos");
+    renderer->u_chunk_origin = tc_shader_uniform(&renderer->shader,
+                                                 "u_chunk_origin");
     renderer->u_fog_color = tc_shader_uniform(&renderer->shader,
                                               "u_fog_color");
     renderer->u_fog_start = tc_shader_uniform(&renderer->shader,
                                               "u_fog_start");
     renderer->u_fog_end = tc_shader_uniform(&renderer->shader, "u_fog_end");
     if (renderer->u_mvp < 0 || renderer->u_texture < 0
-        || renderer->u_camera_pos < 0 || renderer->u_fog_color < 0
+        || renderer->u_camera_pos < 0 || renderer->u_chunk_origin < 0
+        || renderer->u_fog_color < 0
         || renderer->u_fog_start < 0 || renderer->u_fog_end < 0) {
         tc_log_error("shader is missing required uniforms");
+        tc_renderer_shutdown(renderer);
+        return 0;
+    }
+
+    snprintf(vertex_path, sizeof(vertex_path), "%s/model.vert", shader_dir);
+    snprintf(fragment_path, sizeof(fragment_path), "%s/model.frag",
+             shader_dir);
+
+    if (!tc_shader_load(&renderer->model_shader, arena, vertex_path,
+                        fragment_path)) {
+        tc_renderer_shutdown(renderer);
+        return 0;
+    }
+
+    renderer->u_model_view_projection =
+        tc_shader_uniform(&renderer->model_shader, "u_view_projection");
+    renderer->u_model = tc_shader_uniform(&renderer->model_shader, "u_model");
+    renderer->u_model_texture = tc_shader_uniform(&renderer->model_shader,
+                                                  "u_texture");
+    if (renderer->u_model_view_projection < 0 || renderer->u_model < 0
+        || renderer->u_model_texture < 0) {
+        tc_log_error("model shader is missing required uniforms");
         tc_renderer_shutdown(renderer);
         return 0;
     }
@@ -243,6 +271,9 @@ int tc_renderer_upload_mesh(tc_renderer *renderer, tc_render_mesh *target,
 
     glBindVertexArray(0);
 
+    target->origin[0] = mesh->origin[0];
+    target->origin[1] = mesh->origin[1];
+    target->origin[2] = mesh->origin[2];
     target->index_count = (unsigned int)mesh->index_count;
     return 1;
 }
@@ -277,6 +308,22 @@ void tc_renderer_set_render_scale(tc_renderer *renderer, float scale) {
     }
 
     renderer->render_scale = scale;
+}
+
+void tc_renderer_set_fog(tc_renderer *renderer, float start, float end) {
+    if (renderer == NULL) {
+        return;
+    }
+
+    if (start < 0.0f) {
+        start = 0.0f;
+    }
+    if (end <= start) {
+        end = start + 1.0f;
+    }
+
+    renderer->fog_start = start;
+    renderer->fog_end = end;
 }
 
 void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
@@ -344,8 +391,8 @@ void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
     glUniformMatrix4fv(renderer->u_mvp, 1, GL_FALSE, mvp);
     glUniform3fv(renderer->u_camera_pos, 1, eye);
     glUniform3fv(renderer->u_fog_color, 1, sky_color);
-    glUniform1f(renderer->u_fog_start, 48.0f);
-    glUniform1f(renderer->u_fog_end, 80.0f);
+    glUniform1f(renderer->u_fog_start, renderer->fog_start);
+    glUniform1f(renderer->u_fog_end, renderer->fog_end);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, renderer->texture);
@@ -367,7 +414,49 @@ void tc_renderer_end_frame(tc_renderer *renderer) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, renderer->window_width, renderer->window_height);
+    glBindVertexArray(0);
     renderer->use_scene_fbo = 0;
+}
+
+void tc_renderer_begin_models(tc_renderer *renderer,
+                              const float view_projection[16]) {
+    if (renderer == NULL || view_projection == NULL) {
+        return;
+    }
+
+    tc_shader_bind(&renderer->model_shader);
+    glUniformMatrix4fv(renderer->u_model_view_projection, 1, GL_FALSE,
+                       view_projection);
+    glUniform1i(renderer->u_model_texture, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, renderer->texture);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void tc_renderer_draw_model(tc_renderer *renderer,
+                            const tc_render_mesh *mesh,
+                            const float model[16]) {
+    if (renderer == NULL || mesh == NULL || model == NULL || mesh->vao == 0
+        || mesh->index_count == 0) {
+        return;
+    }
+
+    glBindVertexArray(mesh->vao);
+    glUniformMatrix4fv(renderer->u_model, 1, GL_FALSE, model);
+    glDrawElements(GL_TRIANGLES, (GLsizei)mesh->index_count,
+                   GL_UNSIGNED_INT, (void *)0);
+}
+
+void tc_renderer_end_models(tc_renderer *renderer) {
+    if (renderer == NULL) {
+        return;
+    }
+
+    glDisable(GL_BLEND);
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
 }
 
 void tc_renderer_draw_mesh(tc_renderer *renderer, const tc_render_mesh *mesh) {
@@ -377,9 +466,9 @@ void tc_renderer_draw_mesh(tc_renderer *renderer, const tc_render_mesh *mesh) {
     }
 
     glBindVertexArray(mesh->vao);
+    glUniform3fv(renderer->u_chunk_origin, 1, mesh->origin);
     glDrawElements(GL_TRIANGLES, (GLsizei)mesh->index_count,
                    GL_UNSIGNED_INT, (void *)0);
-    glBindVertexArray(0);
 }
 
 void tc_renderer_shutdown(tc_renderer *renderer) {
@@ -391,6 +480,7 @@ void tc_renderer_shutdown(tc_renderer *renderer) {
     if (renderer->texture != 0) {
         glDeleteTextures(1, &renderer->texture);
     }
+    tc_shader_destroy(&renderer->model_shader);
     tc_shader_destroy(&renderer->shader);
     memset(renderer, 0, sizeof(*renderer));
 }

@@ -46,6 +46,19 @@ static int tile_color_count(const uint8_t *pixels, int tile) {
     return count;
 }
 
+static int tile_has_alpha(const uint8_t *pixels, int tile, int opaque) {
+    for (int y = 0; y < TC_ATLAS_TILE_SIZE; y++) {
+        for (int x = 0; x < TC_ATLAS_TILE_SIZE; x++) {
+            const uint8_t *pixel = tile_pixel(pixels, tile, x, y);
+
+            if ((opaque && pixel[3] == 255) || (!opaque && pixel[3] == 0)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int tile_has_green(const uint8_t *pixels, int tile) {
     for (int y = 0; y < TC_ATLAS_TILE_SIZE; y++) {
         for (int x = 0; x < TC_ATLAS_TILE_SIZE; x++) {
@@ -75,7 +88,12 @@ static int test_generated_atlas(void) {
         TC_TILE_DIRT,
         TC_TILE_STONE,
         TC_TILE_SAND,
-        TC_TILE_BEDROCK
+        TC_TILE_BEDROCK,
+        TC_TILE_SKIN,
+        TC_TILE_SHIRT,
+        TC_TILE_PANTS,
+        TC_TILE_HAIR,
+        TC_TILE_FACE
     };
 
     tc_texture_generate_atlas(pixels);
@@ -122,6 +140,32 @@ static int test_generated_atlas(void) {
         || !check(grass_side_bottom[0] > grass_side_bottom[1]
                   && grass_side_bottom[1] > grass_side_bottom[2],
                   "grass side bottom is not dirt")) {
+        return 0;
+    }
+
+    const int tool_tiles[] = {
+        TC_TILE_WOODEN_PICKAXE,
+        TC_TILE_WOODEN_AXE,
+        TC_TILE_WOODEN_SHOVEL,
+        TC_TILE_STONE_PICKAXE,
+        TC_TILE_STONE_AXE,
+        TC_TILE_STONE_SHOVEL
+    };
+
+    for (size_t i = 0; i < sizeof(tool_tiles) / sizeof(tool_tiles[0]); i++) {
+        if (!check(tile_has_alpha(pixels, tool_tiles[i], 1),
+                   "tool tile has no opaque pixels")
+            || !check(tile_has_alpha(pixels, tool_tiles[i], 0),
+                      "tool tile has no transparent background")) {
+            return 0;
+        }
+    }
+
+    const uint8_t *eye =
+        tile_pixel(pixels, TC_TILE_FACE, 3, 11);
+
+    if (!check(eye[0] > 200 && eye[1] > 200 && eye[2] > 200,
+               "face eye is not light")) {
         return 0;
     }
 

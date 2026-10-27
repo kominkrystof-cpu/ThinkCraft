@@ -15,11 +15,24 @@ typedef enum {
     TC_KEY_UP,
     TC_KEY_DOWN,
     TC_KEY_F5,
+    TC_KEY_F6,
     TC_KEY_F9,
     TC_KEY_1,
     TC_KEY_2,
     TC_KEY_3,
     TC_KEY_4,
+    TC_KEY_5,
+    TC_KEY_6,
+    TC_KEY_7,
+    TC_KEY_8,
+    TC_KEY_9,
+    TC_KEY_F3,
+    TC_KEY_F4,
+    TC_KEY_E,
+    TC_KEY_SHIFT,
+    TC_KEY_TAB,
+    TC_KEY_LEFT,
+    TC_KEY_RIGHT,
     TC_KEY_COUNT
 } tc_key;
 
@@ -44,6 +57,10 @@ typedef struct {
     double last_cursor_y;
     float mouse_dx;
     float mouse_dy;
+    float cursor_x;
+    float cursor_y;
+    float scroll_x;
+    float scroll_y;
 } tc_window;
 
 int tc_window_create(tc_window *window, int width, int height, int vsync, const char *title);
@@ -63,5 +80,8 @@ int tc_window_mouse_pressed(const tc_window *window, tc_mouse_button button);
 void tc_window_set_mouse_captured(tc_window *window, int captured);
 int tc_window_mouse_captured(const tc_window *window);
 void tc_window_consume_mouse_delta(tc_window *window, float *dx, float *dy);
+void tc_window_cursor_position(const tc_window *window, float *x, float *y);
+void tc_window_consume_scroll(tc_window *window, float *x, float *y);
+void tc_window_set_vsync(tc_window *window, int vsync);
 
 #endif

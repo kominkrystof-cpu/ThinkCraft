@@ -1,7 +1,22 @@
 #include "thinkcraft/player.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
+
+_Static_assert(offsetof(tc_world, size) == 8, "world size offset changed");
+_Static_assert(offsetof(tc_world, slots) == 32, "world slots offset changed");
+_Static_assert(sizeof(tc_world_slot) == 65568, "world slot size changed");
+_Static_assert(offsetof(tc_chunk, blocks) == 16, "chunk blocks offset changed");
+_Static_assert(offsetof(tc_world_slot, chunk_x) == 65552,
+               "world slot chunk x offset changed");
+_Static_assert(offsetof(tc_world_slot, chunk_z) == 65556,
+               "world slot chunk z offset changed");
+_Static_assert(offsetof(tc_world_slot, loaded) == 65560,
+               "world slot loaded offset changed");
+
+int tc_asm_aabb_collides(const tc_world *world, int min_x, int max_x,
+                         int min_y, int max_y, int min_z, int max_z);
 
 #define TC_PLAYER_WALK_SPEED 4.8f
 #define TC_PLAYER_SPRINT_SPEED 7.4f
@@ -11,40 +26,69 @@
 #define TC_PLAYER_JUMP_SPEED 8.4f
 #define TC_PLAYER_TERMINAL_SPEED 60.0f
 #define TC_PLAYER_STEP_HEIGHT 1.02f
-#define TC_PLAYER_SUBSTEP 0.2f
+#define TC_PLAYER_SUBSTEP 0.125f
 #define TC_PLAYER_EPSILON 0.0001f
+#define TC_PLAYER_SWEEP_ITERATIONS 12
 
-static int player_collides(const tc_world *world, const float position[3]) {
+static float player_height(const tc_player *player) {
+    return player->crouching ? TC_PLAYER_CROUCH_HEIGHT : TC_PLAYER_HEIGHT;
+}
+
+static int player_collides(const tc_world *world, const tc_player *player,
+                           const float position[3]) {
     const float half_width = TC_PLAYER_WIDTH * 0.5f;
     int min_x = (int)floorf(position[0] - half_width);
     int max_x = (int)floorf(position[0] + half_width - TC_PLAYER_EPSILON);
     int min_y = (int)floorf(position[1]);
-    int max_y = (int)floorf(position[1] + TC_PLAYER_HEIGHT
+    int max_y = (int)floorf(position[1] + player_height(player)
                             - TC_PLAYER_EPSILON);
     int min_z = (int)floorf(position[2] - half_width);
     int max_z = (int)floorf(position[2] + half_width - TC_PLAYER_EPSILON);
 
-    for (int y = min_y; y <= max_y; y++) {
-        for (int z = min_z; z <= max_z; z++) {
-            for (int x = min_x; x <= max_x; x++) {
-                if (tc_block_is_solid(tc_world_get_block(world, x, y, z))) {
-                    return 1;
-                }
-            }
-        }
-    }
+    return tc_asm_aabb_collides(world, min_x, max_x, min_y, max_y, min_z,
+                                max_z);
+}
 
-    return 0;
+static int player_supported_at(const tc_world *world,
+                               const float position[3]) {
+    const float half_width = TC_PLAYER_WIDTH * 0.5f;
+    int min_x = (int)floorf(position[0] - half_width);
+    int max_x = (int)floorf(position[0] + half_width - TC_PLAYER_EPSILON);
+    int min_z = (int)floorf(position[2] - half_width);
+    int max_z = (int)floorf(position[2] + half_width - TC_PLAYER_EPSILON);
+    int support_y = (int)floorf(position[1]) - 1;
+
+    return tc_asm_aabb_collides(world, min_x, max_x, support_y, support_y,
+                                min_z, max_z);
 }
 
 static void move_axis(tc_player *player, const tc_world *world, int axis,
                       float amount) {
+    float start;
+    float blocked;
+    float safe;
+
     if (fabsf(amount) <= TC_PLAYER_EPSILON) {
         return;
     }
 
+    if ((axis == 0 || axis == 2) && player->crouching && player->on_ground) {
+        float target[3] = {
+            player->position[0],
+            player->position[1],
+            player->position[2]
+        };
+
+        target[axis] += amount;
+        if (!player_collides(world, player, target)
+            && !player_supported_at(world, target)) {
+            return;
+        }
+    }
+
+    start = player->position[axis];
     player->position[axis] += amount;
-    if (!player_collides(world, player->position)) {
+    if (!player_collides(world, player, player->position)) {
         if (axis == 1 && amount < 0.0f) {
             player->on_ground = 0;
         }
@@ -55,35 +99,33 @@ static void move_axis(tc_player *player, const tc_world *world, int axis,
         float previous_y = player->position[1];
 
         player->position[1] += TC_PLAYER_STEP_HEIGHT;
-        if (!player_collides(world, player->position)) {
+        if (!player_collides(world, player, player->position)) {
             player->velocity[1] = 0.0f;
             return;
         }
         player->position[1] = previous_y;
     }
 
-    if (axis == 0 || axis == 2) {
-        float half_width = TC_PLAYER_WIDTH * 0.5f;
+    blocked = player->position[axis];
+    safe = start;
+    for (int iteration = 0; iteration < TC_PLAYER_SWEEP_ITERATIONS;
+         iteration++) {
+        float middle = (safe + blocked) * 0.5f;
 
-        if (amount > 0.0f) {
-            player->position[axis] =
-                floorf(player->position[axis] + half_width
-                       - TC_PLAYER_EPSILON) - half_width;
+        player->position[axis] = middle;
+        if (player_collides(world, player, player->position)) {
+            blocked = middle;
         } else {
-            player->position[axis] =
-                floorf(player->position[axis] - half_width) + 1.0f
-                + half_width;
+            safe = middle;
         }
-    } else if (amount < 0.0f) {
-        player->position[1] = floorf(player->position[1]) + 1.0f;
-        player->on_ground = 1;
-    } else {
-        player->position[1] =
-            floorf(player->position[1] + TC_PLAYER_HEIGHT
-                   - TC_PLAYER_EPSILON) - TC_PLAYER_HEIGHT;
     }
 
+    player->position[axis] = safe;
     player->velocity[axis] = 0.0f;
+
+    if (axis == 1 && amount < 0.0f) {
+        player->on_ground = 1;
+    }
 }
 
 static void move_player(tc_player *player, const tc_world *world, float dx,
@@ -129,6 +171,7 @@ void tc_player_init(tc_player *player, const float position[3], float yaw,
     memcpy(player->position, position, sizeof(player->position));
     player->yaw = yaw;
     player->pitch = pitch;
+    tc_survival_init(&player->survival);
 }
 
 int tc_player_spawn(tc_player *player, const tc_world *world, float x, float z,
@@ -187,30 +230,27 @@ void tc_player_look(tc_player *player, float delta_x, float delta_y,
     }
 }
 
-void tc_player_update(tc_player *player, const tc_world *world,
-                      const tc_player_input *input, float dt) {
-    tc_player_input empty = {0.0f, 0.0f, 0, 0};
-    float forward;
-    float strafe;
-    float wish_length;
-    float wish_x = 0.0f;
-    float wish_z = 0.0f;
-    float speed;
-    float target_x;
-    float target_z;
-    float acceleration;
-
-    if (player == NULL || world == NULL || dt <= 0.0f) {
-        return;
+const char *tc_game_mode_name(tc_game_mode mode) {
+    switch (mode) {
+    case TC_GAME_MODE_CREATIVE:
+        return "CREATIVE";
+    case TC_GAME_MODE_SPECTATOR:
+        return "SPECTATOR";
+    case TC_GAME_MODE_SURVIVAL:
+    default:
+        return "SURVIVAL";
     }
+}
 
-    if (input == NULL) {
-        input = &empty;
-    }
+static void player_wish(const tc_player *player, const tc_player_input *input,
+                        float wish[2]) {
+    float forward = input->forward;
+    float strafe = input->strafe;
+    float wish_length = sqrtf(forward * forward + strafe * strafe);
 
-    forward = input->forward;
-    strafe = input->strafe;
-    wish_length = sqrtf(forward * forward + strafe * strafe);
+    wish[0] = 0.0f;
+    wish[1] = 0.0f;
+
     if (wish_length > 1.0f) {
         forward /= wish_length;
         strafe /= wish_length;
@@ -220,24 +260,94 @@ void tc_player_update(tc_player *player, const tc_world *world,
         float sin_yaw = sinf(player->yaw);
         float cos_yaw = cosf(player->yaw);
 
-        wish_x = sin_yaw * forward + cos_yaw * strafe;
-        wish_z = -cos_yaw * forward + sin_yaw * strafe;
+        wish[0] = sin_yaw * forward + cos_yaw * strafe;
+        wish[1] = -cos_yaw * forward + sin_yaw * strafe;
+    }
+}
+
+void tc_player_update(tc_player *player, const tc_world *world,
+                      const tc_player_input *input, float dt) {
+    tc_player_update_mode(player, world, input, dt, TC_GAME_MODE_SURVIVAL);
+}
+
+void tc_player_update_mode(tc_player *player, const tc_world *world,
+                           const tc_player_input *input, float dt,
+                           tc_game_mode mode) {
+    tc_player_input empty = {0.0f, 0.0f, 0, 0, 0, 0};
+    float wish[2];
+    float speed;
+    float target_x;
+    float target_z;
+    float acceleration;
+    float vertical_target;
+    int was_on_ground;
+    int jumped = 0;
+
+    if (player == NULL || world == NULL || dt <= 0.0f) {
+        return;
     }
 
-    speed = input->sprint ? TC_PLAYER_SPRINT_SPEED : TC_PLAYER_WALK_SPEED;
-    target_x = wish_x * speed;
-    target_z = wish_z * speed;
-    acceleration = player->on_ground ? TC_PLAYER_GROUND_ACCEL
-                                     : TC_PLAYER_AIR_ACCEL;
+    if (input == NULL) {
+        input = &empty;
+    }
+
+    player_wish(player, input, wish);
+    was_on_ground = player->on_ground;
+
+    if (mode == TC_GAME_MODE_SPECTATOR) {
+        player->crouching = 0;
+        speed = input->sprint ? 14.0f : 9.0f;
+        player->velocity[0] = wish[0] * speed;
+        player->velocity[2] = wish[1] * speed;
+        player->velocity[1] = (float)(input->jump - input->descend) * speed;
+        player->position[0] += player->velocity[0] * dt;
+        player->position[1] += player->velocity[1] * dt;
+        player->position[2] += player->velocity[2] * dt;
+        if (player->position[1] < TC_WORLD_FLOOR_Y) {
+            player->position[1] = TC_WORLD_FLOOR_Y;
+        }
+        player->on_ground = 0;
+        return;
+    }
+
+    if (mode == TC_GAME_MODE_CREATIVE) {
+        player->crouching = 0;
+        speed = input->sprint ? 10.0f : 7.0f;
+        acceleration = 60.0f;
+        vertical_target = (float)(input->jump - input->descend) * speed;
+    } else {
+        if (input->crouch) {
+            player->crouching = 1;
+        } else if (player->crouching) {
+            player->crouching = 0;
+            if (player_collides(world, player, player->position)) {
+                player->crouching = 1;
+            }
+        }
+        speed = player->crouching
+              ? 1.8f
+              : (input->sprint ? TC_PLAYER_SPRINT_SPEED
+                               : TC_PLAYER_WALK_SPEED);
+        acceleration = player->on_ground ? TC_PLAYER_GROUND_ACCEL
+                                         : TC_PLAYER_AIR_ACCEL;
+        vertical_target = 0.0f;
+    }
+
+    target_x = wish[0] * speed;
+    target_z = wish[1] * speed;
 
     player->velocity[0] = approach(player->velocity[0], target_x,
                                    acceleration * dt);
     player->velocity[2] = approach(player->velocity[2], target_z,
                                    acceleration * dt);
 
-    if (input->jump && player->on_ground) {
+    if (mode == TC_GAME_MODE_CREATIVE) {
+        player->velocity[1] = approach(player->velocity[1], vertical_target,
+                                       acceleration * dt);
+    } else if (input->jump && player->on_ground) {
         player->velocity[1] = TC_PLAYER_JUMP_SPEED;
         player->on_ground = 0;
+        jumped = 1;
     } else {
         player->velocity[1] -= TC_PLAYER_GRAVITY * dt;
         if (player->velocity[1] < -TC_PLAYER_TERMINAL_SPEED) {
@@ -256,6 +366,35 @@ void tc_player_update(tc_player *player, const tc_world *world,
         player->velocity[1] = 0.0f;
         player->on_ground = 1;
     }
+
+    if (mode == TC_GAME_MODE_SURVIVAL) {
+        float horizontal = sqrtf(player->velocity[0] * player->velocity[0]
+                                 + player->velocity[2] * player->velocity[2])
+                         * dt;
+
+        if (jumped) {
+            tc_survival_add_exhaustion(&player->survival, 0.05f);
+        }
+        if (horizontal > 0.0f && player->on_ground
+            && !player->crouching) {
+            tc_survival_add_exhaustion(
+                &player->survival,
+                horizontal * (input->sprint ? 0.1f : 0.01f));
+        }
+
+        if (player->on_ground) {
+            if (!was_on_ground && player->survival.fall_distance
+                                  > TC_SURVIVAL_SAFE_FALL_DISTANCE) {
+                tc_survival_apply_fall(&player->survival,
+                                       player->survival.fall_distance);
+            }
+            player->survival.fall_distance = 0.0f;
+        } else if (player->velocity[1] < 0.0f) {
+            player->survival.fall_distance += -player->velocity[1] * dt;
+        }
+
+        tc_survival_tick(&player->survival, dt);
+    }
 }
 
 void tc_player_get_eye(const tc_player *player, float eye[3]) {
@@ -264,7 +403,9 @@ void tc_player_get_eye(const tc_player *player, float eye[3]) {
     }
 
     eye[0] = player->position[0];
-    eye[1] = player->position[1] + TC_PLAYER_EYE_HEIGHT;
+    eye[1] = player->position[1]
+           + (player->crouching ? TC_PLAYER_CROUCH_EYE_HEIGHT
+                                : TC_PLAYER_EYE_HEIGHT);
     eye[2] = player->position[2];
 }
 
@@ -301,7 +442,7 @@ int tc_player_intersects_block(const tc_player *player, int x, int y, int z) {
     max_z = player->position[2] + half_width;
 
     return max_x > (float)x && min_x < (float)(x + 1)
-        && player->position[1] + TC_PLAYER_HEIGHT > (float)y
+        && player->position[1] + player_height(player) > (float)y
         && min_y < (float)(y + 1)
         && max_z > (float)z && min_z < (float)(z + 1);
 }

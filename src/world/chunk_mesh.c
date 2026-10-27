@@ -47,7 +47,7 @@ static uint8_t block_face_tile(uint8_t block, int axis, int positive) {
 }
 
 static void block_face_style(uint8_t block, int axis, int positive,
-                             uint8_t color[3], uint8_t *tile) {
+                             uint8_t *shade_out, uint8_t *tile) {
     float shade;
 
     if (axis == 1) {
@@ -58,9 +58,7 @@ static void block_face_style(uint8_t block, int axis, int positive,
         shade = positive ? 0.74f : 0.64f;
     }
 
-    color[0] = to_byte(shade);
-    color[1] = color[0];
-    color[2] = color[0];
+    *shade_out = to_byte(shade);
     *tile = block_face_tile(block, axis, positive);
 }
 
@@ -78,17 +76,15 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
     int max_y = -1;
     double scan_start;
     double build_start;
-    float origin[3];
 
     if (chunk == NULL || mesh == NULL) {
         return 0;
     }
 
-    origin[0] = (float)chunk->origin_x;
-    origin[1] = (float)chunk->origin_y;
-    origin[2] = (float)chunk->origin_z;
-
     tc_mesh_clear(mesh);
+    mesh->origin[0] = (float)chunk->origin_x;
+    mesh->origin[1] = (float)chunk->origin_y;
+    mesh->origin[2] = (float)chunk->origin_z;
 
     scan_start = tc_time_now();
     stats.solid_blocks = tc_chunk_count_solid(chunk->blocks,
@@ -211,53 +207,45 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                     };
                     p[axis] = coordinate[axis] + 1;
 
-                    float positions[4][3] = {
-                        {origin[0] + (float)p[0],
-                         origin[1] + (float)p[1],
-                         origin[2] + (float)p[2]},
-                        {origin[0] + (float)p[0],
-                         origin[1] + (float)p[1],
-                         origin[2] + (float)p[2]},
-                        {origin[0] + (float)p[0],
-                         origin[1] + (float)p[1],
-                         origin[2] + (float)p[2]},
-                        {origin[0] + (float)p[0],
-                         origin[1] + (float)p[1],
-                         origin[2] + (float)p[2]}
+                    uint16_t positions[4][3] = {
+                        {(uint16_t)p[0], (uint16_t)p[1], (uint16_t)p[2]},
+                        {(uint16_t)p[0], (uint16_t)p[1], (uint16_t)p[2]},
+                        {(uint16_t)p[0], (uint16_t)p[1], (uint16_t)p[2]},
+                        {(uint16_t)p[0], (uint16_t)p[1], (uint16_t)p[2]}
                     };
-                    float uvs[4][2];
-                    uint8_t color[3];
+                    uint8_t uvs[4][2];
+                    uint8_t shade;
                     uint8_t tile;
                     tc_vertex quad[4];
 
                     if (axis == 0) {
-                        uvs[0][0] = 0.0f;
-                        uvs[0][1] = 0.0f;
-                        uvs[1][0] = 0.0f;
-                        uvs[1][1] = (float)w;
-                        uvs[2][0] = (float)h;
-                        uvs[2][1] = (float)w;
-                        uvs[3][0] = (float)h;
-                        uvs[3][1] = 0.0f;
+                        uvs[0][0] = 0;
+                        uvs[0][1] = 0;
+                        uvs[1][0] = 0;
+                        uvs[1][1] = (uint8_t)w;
+                        uvs[2][0] = (uint8_t)h;
+                        uvs[2][1] = (uint8_t)w;
+                        uvs[3][0] = (uint8_t)h;
+                        uvs[3][1] = 0;
                     } else {
-                        uvs[0][0] = 0.0f;
-                        uvs[0][1] = 0.0f;
-                        uvs[1][0] = (float)w;
-                        uvs[1][1] = 0.0f;
-                        uvs[2][0] = (float)w;
-                        uvs[2][1] = (float)h;
-                        uvs[3][0] = 0.0f;
-                        uvs[3][1] = (float)h;
+                        uvs[0][0] = 0;
+                        uvs[0][1] = 0;
+                        uvs[1][0] = (uint8_t)w;
+                        uvs[1][1] = 0;
+                        uvs[2][0] = (uint8_t)w;
+                        uvs[2][1] = (uint8_t)h;
+                        uvs[3][0] = 0;
+                        uvs[3][1] = (uint8_t)h;
                     }
 
-                    positions[1][u] += (float)w;
-                    positions[2][u] += (float)w;
-                    positions[2][v] += (float)h;
-                    positions[3][v] += (float)h;
+                    positions[1][u] = (uint16_t)(positions[1][u] + w);
+                    positions[2][u] = (uint16_t)(positions[2][u] + w);
+                    positions[2][v] = (uint16_t)(positions[2][v] + h);
+                    positions[3][v] = (uint16_t)(positions[3][v] + h);
 
                     if (c < 0) {
-                        float temp_position[3];
-                        float temp_uv[2];
+                        uint16_t temp_position[3];
+                        uint8_t temp_uv[2];
 
                         memcpy(temp_position, positions[1],
                                sizeof(temp_position));
@@ -272,15 +260,14 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                     }
 
                     block_face_style((uint8_t)(c > 0 ? c : -c), axis,
-                                     c > 0, color, &tile);
+                                     c > 0, &shade, &tile);
 
                     for (int vertex = 0; vertex < 4; vertex++) {
                         memcpy(quad[vertex].position, positions[vertex],
                                sizeof(quad[vertex].position));
                         memcpy(quad[vertex].uv, uvs[vertex],
                                sizeof(quad[vertex].uv));
-                        memcpy(quad[vertex].color, color,
-                               sizeof(quad[vertex].color));
+                        quad[vertex].shade = shade;
                         quad[vertex].tile = tile;
                     }
 

@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 typedef struct {
-    float position[3];
-    float uv[2];
-    uint8_t color[3];
+    uint16_t position[3];
+    uint8_t uv[2];
+    uint8_t shade;
     uint8_t tile;
 } tc_vertex;
 
@@ -19,6 +19,7 @@ typedef struct {
     size_t index_count;
     size_t index_capacity;
     size_t quad_count;
+    float origin[3];
 } tc_mesh;
 
 void tc_mesh_init(tc_mesh *mesh);

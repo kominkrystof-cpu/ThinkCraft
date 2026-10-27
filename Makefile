@@ -38,6 +38,9 @@ TEST_PLAYER := $(BUILD)/tests/test_player
 TEST_TEXTURE := $(BUILD)/tests/test_texture
 TEST_RAYCAST := $(BUILD)/tests/test_raycast
 TEST_SAVE    := $(BUILD)/tests/test_save
+TEST_SETTINGS := $(BUILD)/tests/test_settings
+TEST_INVENTORY := $(BUILD)/tests/test_inventory
+TEST_SURVIVAL := $(BUILD)/tests/test_survival
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -45,6 +48,8 @@ ENGINE_C_SRCS := \
 	src/core/arena.c \
 	src/core/log.c \
 	src/core/platform.c \
+	src/core/settings.c \
+	src/gfx/entity.c \
 	src/gfx/hud.c \
 	src/gfx/mesh.c \
 	src/gfx/renderer.c \
@@ -52,6 +57,9 @@ ENGINE_C_SRCS := \
 	src/gfx/text.c \
 	src/gfx/texture.c \
 	src/gfx/window.c \
+	src/game/inventory.c \
+	src/game/item.c \
+	src/game/survival.c \
 	src/math/mat4.c \
 	src/player/player.c \
 	src/world/chunk.c \
@@ -62,7 +70,7 @@ ENGINE_C_SRCS := \
 	src/world/world.c \
 	third_party/glad/src/gl.c
 
-ENGINE_ASM_SRCS := src/asm/mat4_mul.asm src/asm/chunk_count_solid.asm
+ENGINE_ASM_SRCS := src/asm/mat4_mul.asm src/asm/chunk_count_solid.asm src/asm/aabb_collides.asm
 
 ENGINE_OBJS := \
 	$(patsubst %.c,$(BUILD)/engine/obj/%.o,$(ENGINE_C_SRCS)) \
@@ -101,6 +109,8 @@ TEST_WORLD_OBJS := \
 TEST_PLAYER_OBJS := \
 	$(BUILD)/tests/obj/tests/test_player.o \
 	$(BUILD)/tests/obj/src/player/player.o \
+	$(BUILD)/tests/obj/src/game/survival.o \
+	$(BUILD)/tests/obj/src/asm/aabb_collides.o \
 	$(BUILD)/tests/obj/src/world/world.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
@@ -144,9 +154,27 @@ TEST_SAVE_OBJS := \
 	$(BUILD)/tests/obj/src/core/log.o \
 	$(BUILD)/tests/obj/src/core/platform.o \
 	$(BUILD)/tests/obj/src/player/player.o \
+	$(BUILD)/tests/obj/src/game/item.o \
+	$(BUILD)/tests/obj/src/game/inventory.o \
+	$(BUILD)/tests/obj/src/game/survival.o \
+	$(BUILD)/tests/obj/src/asm/aabb_collides.o \
 	$(BUILD)/tests/obj/src/math/mat4.o \
 	$(BUILD)/tests/obj/src/asm/mat4_mul.o \
 	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
+
+TEST_SETTINGS_OBJS := \
+	$(BUILD)/tests/obj/tests/test_settings.o \
+	$(BUILD)/tests/obj/src/core/settings.o \
+	$(BUILD)/tests/obj/src/core/log.o
+
+TEST_INVENTORY_OBJS := \
+	$(BUILD)/tests/obj/tests/test_inventory.o \
+	$(BUILD)/tests/obj/src/game/item.o \
+	$(BUILD)/tests/obj/src/game/inventory.o
+
+TEST_SURVIVAL_OBJS := \
+	$(BUILD)/tests/obj/tests/test_survival.o \
+	$(BUILD)/tests/obj/src/game/survival.o
 
 all: engine
 
@@ -192,6 +220,18 @@ $(TEST_SAVE): $(TEST_SAVE_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_SETTINGS): $(TEST_SETTINGS_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
+$(TEST_INVENTORY): $(TEST_INVENTORY_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
+$(TEST_SURVIVAL): $(TEST_SURVIVAL_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -208,7 +248,7 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save
+test: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
@@ -231,7 +271,16 @@ test-raycast: $(TEST_RAYCAST)
 test-save: $(TEST_SAVE)
 	./$(TEST_SAVE)
 
-test-all: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-transpiler
+test-settings: $(TEST_SETTINGS)
+	./$(TEST_SETTINGS)
+
+test-inventory: $(TEST_INVENTORY)
+	./$(TEST_INVENTORY)
+
+test-survival: $(TEST_SURVIVAL)
+	./$(TEST_SURVIVAL)
+
+test-all: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -249,6 +298,6 @@ clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d) $(TEST_RAYCAST_OBJS:.o=.d) $(TEST_SAVE_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d) $(TEST_RAYCAST_OBJS:.o=.d) $(TEST_SAVE_OBJS:.o=.d) $(TEST_SETTINGS_OBJS:.o=.d) $(TEST_INVENTORY_OBJS:.o=.d) $(TEST_SURVIVAL_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-transpiler transpiler run benchmark clean

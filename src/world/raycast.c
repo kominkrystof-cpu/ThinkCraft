@@ -63,6 +63,7 @@ int tc_world_raycast(const tc_world *world, const float origin[3],
         hit->previous_y = y;
         hit->previous_z = z;
         hit->block = tc_world_get_block(world, x, y, z);
+        hit->distance = 0.0f;
         return 1;
     }
 
@@ -118,6 +119,7 @@ int tc_world_raycast(const tc_world *world, const float origin[3],
                 hit->previous_y = previous_y;
                 hit->previous_z = previous_z;
                 hit->block = block;
+                hit->distance = (float)distance;
                 return 1;
             }
         }

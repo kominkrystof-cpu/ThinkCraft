@@ -193,6 +193,7 @@ int tc_world_init(tc_world *world, tc_arena *arena, int radius) {
     bytes = slot_count * sizeof(tc_world_slot);
     memset(world, 0, sizeof(*world));
     world->radius = radius;
+    world->max_radius = radius;
     world->size = size;
     world->seed = TC_TERRAIN_DEFAULT_SEED;
     world->slots = tc_arena_alloc(arena, bytes);
@@ -277,6 +278,42 @@ int tc_world_update(tc_world *world, int center_chunk_x, int center_chunk_z) {
     }
 
     return 1;
+}
+
+int tc_world_set_radius(tc_world *world, int radius) {
+    if (world == NULL || radius < 0 || radius > world->max_radius) {
+        return 0;
+    }
+
+    if (world->radius != radius) {
+        world->radius = radius;
+    }
+
+    return tc_world_update(world, world->center_chunk_x, world->center_chunk_z);
+}
+
+size_t tc_world_loaded_count(const tc_world *world) {
+    size_t count = 0;
+
+    if (world == NULL || world->slots == NULL) {
+        return 0;
+    }
+
+    for (int index = 0; index < world->size * world->size; index++) {
+        if (world->slots[index].loaded) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+size_t tc_world_capacity(const tc_world *world) {
+    if (world == NULL || world->size <= 0) {
+        return 0;
+    }
+
+    return (size_t)world->size * (size_t)world->size;
 }
 
 tc_chunk *tc_world_chunk_at(const tc_world *world, int chunk_x, int chunk_z) {

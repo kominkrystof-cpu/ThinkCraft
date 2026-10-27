@@ -88,3 +88,28 @@ void tc_sleep_ms(double milliseconds) {
     ts.tv_nsec = (long)((milliseconds - (double)ts.tv_sec * 1000.0) * 1000000.0);
     nanosleep(&ts, NULL);
 }
+
+long long tc_platform_rss_bytes(void) {
+    FILE *file;
+    long pages;
+    long resident;
+    long page_size;
+
+    file = fopen("/proc/self/statm", "r");
+    if (file == NULL) {
+        return 0;
+    }
+
+    if (fscanf(file, "%ld %ld", &pages, &resident) != 2) {
+        fclose(file);
+        return 0;
+    }
+    fclose(file);
+
+    page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0 || resident < 0) {
+        return 0;
+    }
+
+    return (long long)resident * (long long)page_size;
+}

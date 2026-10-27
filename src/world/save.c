@@ -1,4 +1,5 @@
 #include "thinkcraft/save.h"
+#include "thinkcraft/item.h"
 #include "thinkcraft/log.h"
 
 #include <errno.h>
@@ -46,6 +47,50 @@ static void write_f32(unsigned char *bytes, float value) {
     write_u32(bytes, bits);
 }
 
+static uint16_t read_u16(const unsigned char *bytes) {
+    return (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8));
+}
+
+static void write_u16(unsigned char *bytes, uint16_t value) {
+    bytes[0] = (unsigned char)(value & 0xffu);
+    bytes[1] = (unsigned char)((value >> 8) & 0xffu);
+}
+
+#define TC_SAVE_HEADER_BYTES 64
+#define TC_SAVE_V3_HEADER_BYTES 48
+#define TC_SAVE_STACK_BYTES 8
+
+static int stack_valid(const tc_item_stack *stack) {
+    uint16_t max_stack;
+    uint16_t max_durability;
+
+    if (stack->item == TC_ITEM_NONE || stack->count == 0) {
+        return stack->item == TC_ITEM_NONE && stack->count == 0
+            && stack->durability == 0;
+    }
+    if (!tc_item_is_valid(stack->item)) {
+        return 0;
+    }
+
+    max_stack = tc_item_max_stack(stack->item);
+    max_durability = tc_item_max_durability(stack->item);
+    return stack->count > 0 && stack->count <= max_stack
+        && stack->durability <= max_durability;
+}
+
+static void write_stack(unsigned char *record, const tc_item_stack *stack) {
+    write_u16(record, stack->item);
+    write_u16(record + 2, stack->count);
+    write_u16(record + 4, stack->durability);
+    write_u16(record + 6, 0);
+}
+
+static void read_stack(const unsigned char *record, tc_item_stack *stack) {
+    stack->item = read_u16(record);
+    stack->count = read_u16(record + 2);
+    stack->durability = read_u16(record + 4);
+}
+
 static int write_bytes(FILE *file, const void *bytes, size_t count) {
     return fwrite(bytes, 1, count, file) == count;
 }
@@ -63,7 +108,7 @@ static int valid_position(const tc_save_data *data) {
         && data->position[1] >= 0.0f
         && data->position[1] < (float)TC_CHUNK_SIZE_Y
         && data->selected_hotbar >= 0
-        && data->selected_hotbar < 4;
+        && data->selected_hotbar < TC_ITEM_HOTBAR_COUNT;
 }
 
 int tc_save_ensure_directory(const char *path) {
@@ -107,18 +152,38 @@ int tc_save_ensure_directory(const char *path) {
 }
 
 int tc_save_write(const char *path, const tc_world *world,
-                  const tc_player *player, int selected_hotbar) {
-    unsigned char header[40];
+                  const tc_player *player, const tc_inventory *inventory,
+                  tc_game_mode game_mode) {
+    unsigned char header[TC_SAVE_HEADER_BYTES];
+    unsigned char record[TC_SAVE_STACK_BYTES];
     char temporary[4096];
     FILE *file;
     int written;
 
-    if (path == NULL || world == NULL || player == NULL
-        || selected_hotbar < 0 || selected_hotbar >= 4
+    if (path == NULL || world == NULL || player == NULL || inventory == NULL
+        || inventory->selected < 0
+        || inventory->selected >= TC_ITEM_HOTBAR_COUNT
+        || game_mode < 0 || game_mode >= TC_GAME_MODE_COUNT
+        || !isfinite(player->survival.health)
+        || !isfinite(player->survival.hunger)
+        || !isfinite(player->survival.exhaustion)
+        || player->survival.health < 0.0f
+        || player->survival.health > TC_SURVIVAL_MAX_HEALTH
+        || player->survival.hunger < 0.0f
+        || player->survival.hunger > TC_SURVIVAL_MAX_HUNGER
+        || player->survival.exhaustion < 0.0f
+        || player->survival.exhaustion > 100.0f
+        || !stack_valid(&inventory->cursor)
         || world->edit_count > UINT32_MAX
         || world->edit_count > TC_SAVE_MAX_EDITS
         || strlen(path) + 5 >= sizeof(temporary)) {
         return 0;
+    }
+
+    for (int index = 0; index < TC_INVENTORY_SLOT_COUNT; index++) {
+        if (!stack_valid(&inventory->slots[index])) {
+            return 0;
+        }
     }
 
     if (!tc_save_ensure_directory(path)) {
@@ -135,12 +200,18 @@ int tc_save_write(const char *path, const tc_world *world,
     write_u32(header + 4, TC_SAVE_VERSION);
     write_u32(header + 8, world->seed);
     write_u32(header + 12, (uint32_t)world->edit_count);
-    write_i32(header + 16, selected_hotbar);
+    write_i32(header + 16, inventory->selected);
     write_f32(header + 20, player->position[0]);
     write_f32(header + 24, player->position[1]);
     write_f32(header + 28, player->position[2]);
     write_f32(header + 32, player->yaw);
     write_f32(header + 36, player->pitch);
+    write_u32(header + 40, (uint32_t)game_mode);
+    write_u32(header + 44, 0);
+    write_f32(header + 48, player->survival.health);
+    write_f32(header + 52, player->survival.hunger);
+    write_f32(header + 56, player->survival.exhaustion);
+    write_u32(header + 60, 0);
 
     file = fopen(temporary, "wb");
     if (file == NULL) {
@@ -150,15 +221,23 @@ int tc_save_write(const char *path, const tc_world *world,
     }
 
     written = write_bytes(file, header, sizeof(header));
+    for (int index = 0; written && index < TC_INVENTORY_SLOT_COUNT; index++) {
+        write_stack(record, &inventory->slots[index]);
+        written = write_bytes(file, record, sizeof(record));
+    }
+    if (written) {
+        write_stack(record, &inventory->cursor);
+        written = write_bytes(file, record, sizeof(record));
+    }
     for (size_t index = 0; written && index < world->edit_count; index++) {
         const tc_world_edit *edit = &world->edits[index];
-        unsigned char record[13];
+        unsigned char edit_record[13];
 
-        write_i32(record, edit->x);
-        write_i32(record + 4, edit->y);
-        write_i32(record + 8, edit->z);
-        record[12] = edit->block;
-        written = write_bytes(file, record, sizeof(record));
+        write_i32(edit_record, edit->x);
+        write_i32(edit_record + 4, edit->y);
+        write_i32(edit_record + 8, edit->z);
+        edit_record[12] = edit->block;
+        written = write_bytes(file, edit_record, sizeof(edit_record));
     }
 
     if (fclose(file) != 0) {
@@ -182,12 +261,15 @@ int tc_save_write(const char *path, const tc_world *world,
 }
 
 int tc_save_read(const char *path, tc_save_data *data) {
-    unsigned char header[40];
-    unsigned char record[13];
+    unsigned char header[TC_SAVE_HEADER_BYTES];
+    unsigned char record[TC_SAVE_STACK_BYTES];
+    unsigned char edit_record[13];
     FILE *file;
     uint32_t magic;
     uint32_t version;
     uint32_t edit_count;
+    uint32_t game_mode;
+    size_t header_bytes;
 
     if (path == NULL || data == NULL) {
         return 0;
@@ -202,7 +284,7 @@ int tc_save_read(const char *path, tc_save_data *data) {
         return 0;
     }
 
-    if (!read_bytes(file, header, sizeof(header))) {
+    if (!read_bytes(file, header, 8)) {
         tc_log_error("save file %s is truncated", path);
         fclose(file);
         return 0;
@@ -215,9 +297,19 @@ int tc_save_read(const char *path, tc_save_data *data) {
         fclose(file);
         return 0;
     }
-    if (version != TC_SAVE_VERSION) {
+    if (version == 3u) {
+        header_bytes = TC_SAVE_V3_HEADER_BYTES;
+    } else if (version == TC_SAVE_VERSION) {
+        header_bytes = TC_SAVE_HEADER_BYTES;
+    } else {
         tc_log_error("save file %s uses unsupported version %u", path,
                      version);
+        fclose(file);
+        return 0;
+    }
+
+    if (!read_bytes(file, header + 8, header_bytes - 8)) {
+        tc_log_error("save file %s is truncated", path);
         fclose(file);
         return 0;
     }
@@ -230,12 +322,59 @@ int tc_save_read(const char *path, tc_save_data *data) {
     data->position[2] = read_f32(header + 28);
     data->yaw = read_f32(header + 32);
     data->pitch = read_f32(header + 36);
+    game_mode = read_u32(header + 40);
 
-    if (edit_count > TC_SAVE_MAX_EDITS || !valid_position(data)) {
+    data->health = TC_SURVIVAL_MAX_HEALTH;
+    data->hunger = TC_SURVIVAL_MAX_HUNGER;
+    data->exhaustion = 0.0f;
+    if (version >= 4u) {
+        data->health = read_f32(header + 48);
+        data->hunger = read_f32(header + 52);
+        data->exhaustion = read_f32(header + 56);
+    }
+
+    if (edit_count > TC_SAVE_MAX_EDITS || !valid_position(data)
+        || game_mode >= TC_GAME_MODE_COUNT
+        || !isfinite(data->health)
+        || !isfinite(data->hunger)
+        || !isfinite(data->exhaustion)
+        || data->health < 0.0f
+        || data->health > TC_SURVIVAL_MAX_HEALTH
+        || data->hunger < 0.0f
+        || data->hunger > TC_SURVIVAL_MAX_HUNGER
+        || data->exhaustion < 0.0f
+        || data->exhaustion > 100.0f) {
         tc_log_error("save file %s contains invalid header data", path);
         fclose(file);
         return 0;
     }
+    data->game_mode = (tc_game_mode)game_mode;
+
+    for (int index = 0; index < TC_INVENTORY_SLOT_COUNT; index++) {
+        if (!read_bytes(file, record, sizeof(record))) {
+            tc_log_error("save file %s is truncated", path);
+            fclose(file);
+            return 0;
+        }
+        read_stack(record, &data->inventory.slots[index]);
+        if (!stack_valid(&data->inventory.slots[index])) {
+            tc_log_error("save file %s contains an invalid item stack", path);
+            fclose(file);
+            return 0;
+        }
+    }
+    if (!read_bytes(file, record, sizeof(record))) {
+        tc_log_error("save file %s is truncated", path);
+        fclose(file);
+        return 0;
+    }
+    read_stack(record, &data->inventory.cursor);
+    if (!stack_valid(&data->inventory.cursor)) {
+        tc_log_error("save file %s contains an invalid cursor stack", path);
+        fclose(file);
+        return 0;
+    }
+    data->inventory.selected = data->selected_hotbar;
 
     if (edit_count > 0) {
         data->edits = malloc((size_t)edit_count * sizeof(*data->edits));
@@ -249,17 +388,17 @@ int tc_save_read(const char *path, tc_save_data *data) {
     for (uint32_t index = 0; index < edit_count; index++) {
         tc_world_edit *edit = &data->edits[index];
 
-        if (!read_bytes(file, record, sizeof(record))) {
+        if (!read_bytes(file, edit_record, sizeof(edit_record))) {
             tc_log_error("save file %s is truncated", path);
             tc_save_data_shutdown(data);
             fclose(file);
             return 0;
         }
 
-        edit->x = read_i32(record);
-        edit->y = read_i32(record + 4);
-        edit->z = read_i32(record + 8);
-        edit->block = record[12];
+        edit->x = read_i32(edit_record);
+        edit->y = read_i32(edit_record + 4);
+        edit->z = read_i32(edit_record + 8);
+        edit->block = edit_record[12];
 
         if (edit->y < 0 || edit->y >= TC_CHUNK_SIZE_Y
             || (edit->y < TC_WORLD_BEDROCK_LAYERS

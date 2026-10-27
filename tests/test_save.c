@@ -31,6 +31,50 @@ static int init_world(tc_arena *arena, tc_world *world, uint32_t seed) {
     return 1;
 }
 
+static int convert_save_to_v3(const char *source, const char *destination) {
+    unsigned char header[64];
+    unsigned char buffer[4096];
+    FILE *input = fopen(source, "rb");
+    FILE *output = NULL;
+    size_t count;
+    int ok = 1;
+
+    if (input == NULL) {
+        return 0;
+    }
+
+    output = fopen(destination, "wb");
+    if (output == NULL) {
+        fclose(input);
+        return 0;
+    }
+
+    if (fread(header, 1, sizeof(header), input) != sizeof(header)) {
+        ok = 0;
+    }
+    if (ok) {
+        header[4] = 3;
+        header[5] = 0;
+        header[6] = 0;
+        header[7] = 0;
+        ok = fwrite(header, 1, 48, output) == 48;
+    }
+    while (ok && (count = fread(buffer, 1, sizeof(buffer), input)) > 0) {
+        ok = fwrite(buffer, 1, count, output) == count;
+    }
+    if (ferror(input)) {
+        ok = 0;
+    }
+    if (fclose(input) != 0) {
+        ok = 0;
+    }
+    if (fclose(output) != 0) {
+        ok = 0;
+    }
+
+    return ok;
+}
+
 static int apply_save(tc_arena *arena, tc_world *world,
                       const tc_save_data *data) {
     int chunk_x;
@@ -75,6 +119,7 @@ int main(void) {
     tc_world world;
     tc_world restored = {0};
     tc_player player;
+    tc_inventory inventory;
     tc_save_data data;
     float position[3] = {4.5f, 30.0f, 6.5f};
     int height = tc_terrain_height(2, 2, 0x12345678u);
@@ -89,6 +134,14 @@ int main(void) {
     }
 
     tc_player_init(&player, position, 0.75f, -0.2f);
+    tc_inventory_init_starter(&inventory);
+    tc_inventory_select(&inventory, 2);
+    inventory.slots[0].durability = 50;
+    inventory.cursor.item = TC_ITEM_STONE;
+    inventory.cursor.count = 5;
+    player.survival.health = 14.5f;
+    player.survival.hunger = 12.25f;
+    player.survival.exhaustion = 2.5f;
 
     ok = ok && check(tc_world_set_block(&world, 2, 100, 2, TC_BLOCK_STONE),
                      "stone edit failed")
@@ -106,7 +159,7 @@ int main(void) {
 
     ok = ok && check(tc_save_ensure_directory(path),
                      "save directory creation failed")
-      && check(tc_save_write(path, &world, &player, 2),
+      && check(tc_save_write(path, &world, &player, &inventory, TC_GAME_MODE_CREATIVE),
                "save write failed")
       && check(tc_save_read(path, &data), "save read failed")
       && check(data.seed == 0x12345678u, "seed round trip failed")
@@ -118,6 +171,23 @@ int main(void) {
                && fabsf(data.pitch + 0.2f) < 0.0001f,
                "orientation round trip failed")
       && check(data.selected_hotbar == 2, "hotbar round trip failed")
+      && check(data.inventory.selected == 2, "inventory selection round trip failed")
+      && check(data.inventory.slots[0].item == TC_ITEM_STONE_PICKAXE
+               && data.inventory.slots[0].count == 1
+               && data.inventory.slots[0].durability == 50,
+               "tool stack round trip failed")
+      && check(data.inventory.slots[3].item == TC_ITEM_GRASS
+               && data.inventory.slots[3].count == TC_ITEM_MAX_STACK,
+               "block stack round trip failed")
+      && check(data.inventory.cursor.item == TC_ITEM_STONE
+               && data.inventory.cursor.count == 5,
+               "cursor stack round trip failed")
+      && check(data.game_mode == TC_GAME_MODE_CREATIVE,
+               "game mode round trip failed")
+      && check(fabsf(data.health - 14.5f) < 0.0001f
+               && fabsf(data.hunger - 12.25f) < 0.0001f
+               && fabsf(data.exhaustion - 2.5f) < 0.0001f,
+               "survival round trip failed")
       && check(data.edit_count == 4, "saved edit count mismatch")
       && check(data.edits[0].x == 2 && data.edits[0].y == 100
                && data.edits[0].z == 2
@@ -157,6 +227,50 @@ int main(void) {
                    "surface removal was lost after chunk reload")
           && check(tc_world_edit_count(&restored) == 4,
                    "restored edit count changed");
+    }
+
+    if (ok) {
+        char legacy_path[512];
+        tc_save_data legacy;
+
+        snprintf(legacy_path, sizeof(legacy_path), "%s/nested/legacy-v3.tc",
+                 directory);
+        ok = check(convert_save_to_v3(path, legacy_path),
+                   "could not create version 3 save")
+          && check(tc_save_read(legacy_path, &legacy),
+                   "version 3 save was rejected")
+          && check(fabsf(legacy.health - TC_SURVIVAL_MAX_HEALTH) < 0.0001f
+                   && fabsf(legacy.hunger - TC_SURVIVAL_MAX_HUNGER) < 0.0001f
+                   && fabsf(legacy.exhaustion) < 0.0001f,
+                   "version 3 survival defaults are wrong")
+          && check(legacy.inventory.slots[0].durability == 50
+                   && legacy.edit_count == 4,
+                   "version 3 save did not preserve inventory or edits");
+        tc_save_data_shutdown(&legacy);
+        unlink(legacy_path);
+    }
+
+    if (ok) {
+        tc_save_data unsupported;
+        FILE *file = fopen(path, "r+b");
+        const unsigned char version_two[4] = {2, 0, 0, 0};
+        int wrote_version = 0;
+
+        memset(&unsupported, 0, sizeof(unsupported));
+        if (file != NULL) {
+            wrote_version = fseek(file, 4, SEEK_SET) == 0
+                         && fwrite(version_two, 1, sizeof(version_two), file)
+                            == sizeof(version_two);
+            if (fclose(file) != 0) {
+                wrote_version = 0;
+            }
+        }
+        ok = ok && check(wrote_version, "could not create version 2 save")
+          && check(!tc_save_read(path, &unsupported),
+                   "version 2 save was accepted")
+          && check(unsupported.edits == NULL,
+                   "rejected save allocated edits");
+        tc_save_data_shutdown(&unsupported);
     }
 
     if (ok) {

@@ -2,6 +2,7 @@
 #include "thinkcraft/chunk.h"
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/mesh.h"
+#include "thinkcraft/renderer.h"
 #include "thinkcraft/terrain.h"
 #include "thinkcraft/texture.h"
 #include "thinkcraft/world.h"
@@ -34,21 +35,15 @@ static int validate_mesh(const tc_mesh *mesh, const tc_chunk *chunk,
 
     for (size_t i = 0; i < mesh->vertex_count; i++) {
         const tc_vertex *vertex = &mesh->vertices[i];
-        float min_x = (float)chunk->origin_x;
-        float min_y = (float)chunk->origin_y;
-        float min_z = (float)chunk->origin_z;
-        float max_x = min_x + (float)TC_CHUNK_SIZE_X;
-        float max_y = min_y + (float)TC_CHUNK_SIZE_Y;
-        float max_z = min_z + (float)TC_CHUNK_SIZE_Z;
-
-        if (!check(vertex->position[0] >= min_x
-                   && vertex->position[0] <= max_x,
-                   "x position out of chunk range")
-            || !check(vertex->position[1] >= min_y
-                      && vertex->position[1] <= max_y,
+        if (!check(mesh->origin[0] == (float)chunk->origin_x
+                   && mesh->origin[1] == (float)chunk->origin_y
+                   && mesh->origin[2] == (float)chunk->origin_z,
+                   "mesh origin mismatch")
+            || !check(vertex->position[0] <= (uint16_t)TC_CHUNK_SIZE_X,
+                      "x position out of chunk range")
+            || !check(vertex->position[1] <= (uint16_t)TC_CHUNK_SIZE_Y,
                       "y position out of chunk range")
-            || !check(vertex->position[2] >= min_z
-                      && vertex->position[2] <= max_z,
+            || !check(vertex->position[2] <= (uint16_t)TC_CHUNK_SIZE_Z,
                       "z position out of chunk range")
             || !check(vertex->tile < TC_TILE_COUNT, "invalid vertex tile")) {
             return 0;
@@ -477,6 +472,64 @@ static int test_seeded_terrain(void) {
     return ok;
 }
 
+static int test_runtime_radius(void) {
+    tc_arena arena;
+    tc_world world;
+    float fog_start = 0.0f;
+    float fog_end = 0.0f;
+    int ok = 1;
+
+    if (!tc_arena_init(&arena, 8 * 1024 * 1024)) {
+        return 0;
+    }
+
+    if (!tc_world_init(&world, &arena, 3)) {
+        tc_arena_shutdown(&arena);
+        return 0;
+    }
+
+    ok = ok && check(world.radius == 3 && world.max_radius == 3,
+                     "initial active radius is wrong")
+      && check(world.size == 7 && tc_world_capacity(&world) == 49,
+               "world capacity is wrong")
+      && check(tc_world_loaded_count(&world) == 49,
+               "initial loaded chunk count is wrong")
+      && check(tc_world_set_radius(&world, 1),
+               "radius shrink was rejected")
+      && check(world.radius == 1 && world.size == 7,
+               "active radius change altered capacity")
+      && check(tc_world_loaded_count(&world) == 9,
+               "radius shrink did not unload chunks")
+      && check(tc_world_chunk_at(&world, 2, 0) == NULL,
+               "chunk outside the active radius stayed loaded")
+      && check(tc_world_chunk_at(&world, 1, 1) != NULL,
+               "chunk inside the active radius was unloaded")
+      && check(!tc_world_set_radius(&world, 4),
+               "radius above capacity was accepted")
+      && check(!tc_world_set_radius(&world, -1),
+               "negative radius was accepted")
+      && check(tc_world_set_radius(&world, 3),
+               "radius grow was rejected")
+      && check(tc_world_loaded_count(&world) == 49,
+               "radius grow did not load chunks");
+
+    tc_renderer_fog_for_radius(4, &fog_start, &fog_end);
+    ok = ok && check(fog_start > 63.9f && fog_start < 64.1f,
+                     "radius 4 fog start is wrong")
+      && check(fog_end > 79.9f && fog_end < 80.1f,
+               "radius 4 fog end is wrong");
+
+    tc_renderer_fog_for_radius(2, &fog_start, &fog_end);
+    ok = ok && check(fog_start > 38.3f && fog_start < 38.5f,
+                     "radius 2 fog start is wrong")
+      && check(fog_end > 47.9f && fog_end < 48.1f,
+               "radius 2 fog end is wrong");
+
+    tc_world_shutdown(&world);
+    tc_arena_shutdown(&arena);
+    return ok;
+}
+
 int main(void) {
     int ok = 1;
 
@@ -486,6 +539,7 @@ int main(void) {
     ok = ok && test_generated_world();
     ok = ok && test_edit_persistence();
     ok = ok && test_seeded_terrain();
+    ok = ok && test_runtime_radius();
 
     if (!ok) {
         return 1;

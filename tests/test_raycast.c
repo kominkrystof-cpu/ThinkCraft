@@ -2,6 +2,7 @@
 #include "thinkcraft/raycast.h"
 #include "thinkcraft/world.h"
 
+#include <math.h>
 #include <stdio.h>
 
 static int check(int condition, const char *message) {
@@ -22,6 +23,8 @@ static int test_forward_hit(tc_world *world) {
     }
 
     return check(hit.block == TC_BLOCK_STONE, "forward hit wrong block")
+        && check(fabsf(hit.distance - 1.5f) < 0.001f,
+                 "forward hit wrong distance")
         && check(hit.x == 0 && hit.y == 0 && hit.z == 0,
                  "forward hit wrong block position")
         && check(hit.previous_x == 0 && hit.previous_y == 0
@@ -59,6 +62,8 @@ static int test_start_inside(tc_world *world) {
 
     return check(hit.x == 3 && hit.y == 0 && hit.z == 3,
                  "start-inside hit wrong block")
+        && check(fabsf(hit.distance) < 0.001f,
+                 "start-inside hit distance should be zero")
         && check(hit.previous_x == 3 && hit.previous_y == 0
                  && hit.previous_z == 3,
                  "start-inside placement cell mismatch");

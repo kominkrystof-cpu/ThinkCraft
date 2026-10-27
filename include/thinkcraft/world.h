@@ -7,6 +7,7 @@
 
 #define TC_WORLD_DEFAULT_RADIUS 4
 #define TC_WORLD_DEFAULT_SIZE (TC_WORLD_DEFAULT_RADIUS * 2 + 1)
+#define TC_WORLD_MAX_RADIUS 6
 
 typedef struct {
     tc_chunk chunk;
@@ -25,6 +26,7 @@ typedef struct {
 
 typedef struct {
     int radius;
+    int max_radius;
     int size;
     int center_chunk_x;
     int center_chunk_z;
@@ -39,6 +41,9 @@ typedef struct {
 int tc_world_init(tc_world *world, tc_arena *arena, int radius);
 void tc_world_shutdown(tc_world *world);
 int tc_world_update(tc_world *world, int center_chunk_x, int center_chunk_z);
+int tc_world_set_radius(tc_world *world, int radius);
+size_t tc_world_loaded_count(const tc_world *world);
+size_t tc_world_capacity(const tc_world *world);
 void tc_world_set_seed(tc_world *world, uint32_t seed);
 void tc_world_generate_terrain(tc_world *world);
 tc_chunk *tc_world_chunk_at(const tc_world *world, int chunk_x, int chunk_z);

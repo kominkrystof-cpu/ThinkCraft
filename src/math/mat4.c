@@ -97,6 +97,13 @@ void tc_mat4_rotate_y(float *out, float radians) {
     out[10] = c;
 }
 
+void tc_mat4_scale(float *out, float x, float y, float z) {
+    tc_mat4_identity(out);
+    out[0] = x;
+    out[5] = y;
+    out[10] = z;
+}
+
 void tc_mat4_look_at(float *out, const float eye[3], const float center[3],
                      const float up[3]) {
     float forward[3] = {

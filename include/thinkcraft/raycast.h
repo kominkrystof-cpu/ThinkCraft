@@ -11,6 +11,7 @@ typedef struct {
     int previous_y;
     int previous_z;
     uint8_t block;
+    float distance;
 } tc_raycast_hit;
 
 int tc_world_raycast(const tc_world *world, const float origin[3],

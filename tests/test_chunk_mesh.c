@@ -43,14 +43,11 @@ static int validate_mesh(const tc_mesh *mesh, size_t expected_quads) {
 
     for (size_t i = 0; i < mesh->vertex_count; i++) {
         const tc_vertex *vertex = &mesh->vertices[i];
-        if (!check(vertex->position[0] >= 0.0f
-                   && vertex->position[0] <= (float)TC_CHUNK_SIZE_X,
+        if (!check(vertex->position[0] <= (uint16_t)TC_CHUNK_SIZE_X,
                    "x position out of range")
-            || !check(vertex->position[1] >= 0.0f
-                      && vertex->position[1] <= (float)TC_CHUNK_SIZE_Y,
+            || !check(vertex->position[1] <= (uint16_t)TC_CHUNK_SIZE_Y,
                       "y position out of range")
-            || !check(vertex->position[2] >= 0.0f
-                      && vertex->position[2] <= (float)TC_CHUNK_SIZE_Z,
+            || !check(vertex->position[2] <= (uint16_t)TC_CHUNK_SIZE_Z,
                       "z position out of range")
             || !check(vertex->tile < TC_TILE_COUNT, "invalid vertex tile")) {
             return 0;
