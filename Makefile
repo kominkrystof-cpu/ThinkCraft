@@ -41,6 +41,7 @@ TEST_SAVE    := $(BUILD)/tests/test_save
 TEST_SETTINGS := $(BUILD)/tests/test_settings
 TEST_INVENTORY := $(BUILD)/tests/test_inventory
 TEST_SURVIVAL := $(BUILD)/tests/test_survival
+TEST_FALLING := $(BUILD)/tests/test_falling
 
 ENGINE_C_SRCS := \
 	src/main.c \
@@ -49,6 +50,7 @@ ENGINE_C_SRCS := \
 	src/core/log.c \
 	src/core/platform.c \
 	src/core/settings.c \
+	src/gfx/chunk_batch.c \
 	src/gfx/entity.c \
 	src/gfx/hud.c \
 	src/gfx/mesh.c \
@@ -64,13 +66,14 @@ ENGINE_C_SRCS := \
 	src/player/player.c \
 	src/world/chunk.c \
 	src/world/chunk_mesh.c \
+	src/world/falling.c \
 	src/world/raycast.c \
 	src/world/save.c \
 	src/world/terrain.c \
 	src/world/world.c \
 	third_party/glad/src/gl.c
 
-ENGINE_ASM_SRCS := src/asm/mat4_mul.asm src/asm/chunk_count_solid.asm src/asm/aabb_collides.asm
+ENGINE_ASM_SRCS := src/asm/mat4_mul.asm src/asm/chunk_count_solid.asm src/asm/aabb_collides.asm src/asm/batch_bake.asm
 
 ENGINE_OBJS := \
 	$(patsubst %.c,$(BUILD)/engine/obj/%.o,$(ENGINE_C_SRCS)) \
@@ -90,7 +93,8 @@ TEST_CHUNK_OBJS := \
 	$(BUILD)/tests/obj/src/core/arena.o \
 	$(BUILD)/tests/obj/src/core/log.o \
 	$(BUILD)/tests/obj/src/core/platform.o \
-	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
+	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o \
+	$(BUILD)/tests/obj/src/asm/batch_bake.o
 
 TEST_WORLD_OBJS := \
 	$(BUILD)/tests/obj/tests/test_world.o \
@@ -111,6 +115,21 @@ TEST_PLAYER_OBJS := \
 	$(BUILD)/tests/obj/src/player/player.o \
 	$(BUILD)/tests/obj/src/game/survival.o \
 	$(BUILD)/tests/obj/src/asm/aabb_collides.o \
+	$(BUILD)/tests/obj/src/world/world.o \
+	$(BUILD)/tests/obj/src/world/chunk.o \
+	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
+	$(BUILD)/tests/obj/src/world/terrain.o \
+	$(BUILD)/tests/obj/src/gfx/mesh.o \
+	$(BUILD)/tests/obj/src/core/arena.o \
+	$(BUILD)/tests/obj/src/core/log.o \
+	$(BUILD)/tests/obj/src/core/platform.o \
+	$(BUILD)/tests/obj/src/math/mat4.o \
+	$(BUILD)/tests/obj/src/asm/mat4_mul.o \
+	$(BUILD)/tests/obj/src/asm/chunk_count_solid.o
+
+TEST_FALLING_OBJS := \
+	$(BUILD)/tests/obj/tests/test_falling.o \
+	$(BUILD)/tests/obj/src/world/falling.o \
 	$(BUILD)/tests/obj/src/world/world.o \
 	$(BUILD)/tests/obj/src/world/chunk.o \
 	$(BUILD)/tests/obj/src/world/chunk_mesh.o \
@@ -232,6 +251,10 @@ $(TEST_SURVIVAL): $(TEST_SURVIVAL_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $^ -lm -o $@
 
+$(TEST_FALLING): $(TEST_FALLING_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) $^ -lm -o $@
+
 $(BUILD)/tests/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -248,7 +271,7 @@ check-deps:
 		exit 1; \
 	}
 
-test: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival
+test: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-falling
 
 test-math: $(TEST_MATH)
 	./$(TEST_MATH)
@@ -280,7 +303,10 @@ test-inventory: $(TEST_INVENTORY)
 test-survival: $(TEST_SURVIVAL)
 	./$(TEST_SURVIVAL)
 
-test-all: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-transpiler
+test-falling: $(TEST_FALLING)
+	./$(TEST_FALLING)
+
+test-all: test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-falling test-transpiler
 
 test-transpiler:
 	$(MAKE) -C tools/transpiler test
@@ -292,12 +318,12 @@ run: engine
 	./$(ENGINE_BIN)
 
 benchmark: engine
-	./$(ENGINE_BIN) --benchmark --seconds 10
+	./$(ENGINE_BIN) --width 1920 --height 1080 --benchmark --seconds 10
 
 clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C tools/transpiler clean
 
--include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d) $(TEST_RAYCAST_OBJS:.o=.d) $(TEST_SAVE_OBJS:.o=.d) $(TEST_SETTINGS_OBJS:.o=.d) $(TEST_INVENTORY_OBJS:.o=.d) $(TEST_SURVIVAL_OBJS:.o=.d)
+-include $(ENGINE_OBJS:.o=.d) $(TEST_MATH_OBJS:.o=.d) $(TEST_CHUNK_OBJS:.o=.d) $(TEST_WORLD_OBJS:.o=.d) $(TEST_PLAYER_OBJS:.o=.d) $(TEST_TEXTURE_OBJS:.o=.d) $(TEST_RAYCAST_OBJS:.o=.d) $(TEST_SAVE_OBJS:.o=.d) $(TEST_SETTINGS_OBJS:.o=.d) $(TEST_INVENTORY_OBJS:.o=.d) $(TEST_SURVIVAL_OBJS:.o=.d) $(TEST_FALLING_OBJS:.o=.d)
 
-.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-transpiler transpiler run benchmark clean
+.PHONY: all engine check-deps test test-all test-math test-chunk-mesh test-world test-player test-texture test-raycast test-save test-settings test-inventory test-survival test-falling test-transpiler transpiler run benchmark clean

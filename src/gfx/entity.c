@@ -347,7 +347,11 @@ static void draw_item(const tc_entity_renderer *entities,
     }
 
     item_matrix(model, parent, x, y, z, yaw, pitch, scale, item);
-    tc_renderer_draw_model(renderer, mesh, model);
+    if (block != TC_BLOCK_AIR) {
+        tc_renderer_draw_model(renderer, mesh, model);
+    } else {
+        tc_renderer_draw_model_double_sided(renderer, mesh, model);
+    }
 }
 
 void tc_entity_draw_first_person(const tc_entity_renderer *entities,
@@ -383,7 +387,7 @@ void tc_entity_draw_first_person(const tc_entity_renderer *entities,
     tc_mat4_mul(temporary, view, arm_translate);
     tc_mat4_mul(arm_parent, temporary, arm_rotate);
 
-    attachment_matrix(arm_model, arm_parent, 0.0068f, 1, 5.0f, 0.0f, 5.0f);
+    attachment_matrix(arm_model, arm_parent, 0.0045f, 0, 5.0f, 0.0f, 5.0f);
     tc_renderer_draw_model(renderer, &entities->hand_arm, arm_model);
 
     if (item == TC_ITEM_NONE || tc_item_get(item) == NULL) {
@@ -392,16 +396,34 @@ void tc_entity_draw_first_person(const tc_entity_renderer *entities,
 
     if (tc_item_block(item) != TC_BLOCK_AIR) {
         draw_item(entities, renderer, item, arm_parent,
-                  -0.09f, -0.04f, -0.02f,
+                  0.00f, -0.03f, -0.02f,
                   0.65f, 0.55f,
                   0.18f * TC_MODEL_UNIT);
     } else {
         draw_item(entities, renderer, item, arm_parent,
-                  -0.02f, -0.02f, -0.02f,
+                  0.00f, 0.05f, -0.02f,
                   0.18f - swing_curve * 0.10f,
                   0.80f + swing_curve * 0.35f,
                   0.0052f);
     }
+}
+
+void tc_entity_draw_block(const tc_entity_renderer *entities,
+                          tc_renderer *renderer, uint8_t block,
+                          const float position[3]) {
+    float translate[16];
+    float scale_matrix[16];
+    float model[16];
+
+    if (entities == NULL || renderer == NULL || position == NULL
+        || block >= 6 || entities->blocks[block].index_count == 0) {
+        return;
+    }
+
+    tc_mat4_translate(translate, position[0], position[1], position[2]);
+    tc_mat4_scale(scale_matrix, TC_MODEL_UNIT, TC_MODEL_UNIT, TC_MODEL_UNIT);
+    tc_mat4_mul(model, translate, scale_matrix);
+    tc_renderer_draw_model(renderer, &entities->blocks[block], model);
 }
 
 void tc_entity_draw_player(const tc_entity_renderer *entities,
@@ -441,19 +463,19 @@ void tc_entity_draw_player(const tc_entity_renderer *entities,
     tc_renderer_draw_model(renderer, &entities->torso, model);
 
     part_matrix(model, base, 18.0f * TC_MODEL_UNIT, 88.0f * TC_MODEL_UNIT,
-                0.0f, right_arm, 1, TC_MODEL_UNIT, 6.0f, 0.0f, 6.0f);
+                0.0f, right_arm, 0, TC_MODEL_UNIT, 6.0f, 44.0f, 6.0f);
     tc_renderer_draw_model(renderer, &entities->arm, model);
 
     part_matrix(model, base, -18.0f * TC_MODEL_UNIT, 88.0f * TC_MODEL_UNIT,
-                0.0f, left_arm, 1, TC_MODEL_UNIT, 6.0f, 0.0f, 6.0f);
+                0.0f, left_arm, 0, TC_MODEL_UNIT, 6.0f, 44.0f, 6.0f);
     tc_renderer_draw_model(renderer, &entities->arm, model);
 
     part_matrix(model, base, 7.0f * TC_MODEL_UNIT, 44.0f * TC_MODEL_UNIT,
-                0.0f, left_leg, 1, TC_MODEL_UNIT, 6.0f, 0.0f, 6.0f);
+                0.0f, left_leg, 0, TC_MODEL_UNIT, 6.0f, 44.0f, 6.0f);
     tc_renderer_draw_model(renderer, &entities->leg, model);
 
     part_matrix(model, base, -7.0f * TC_MODEL_UNIT, 44.0f * TC_MODEL_UNIT,
-                0.0f, right_leg, 1, TC_MODEL_UNIT, 6.0f, 0.0f, 6.0f);
+                0.0f, right_leg, 0, TC_MODEL_UNIT, 6.0f, 44.0f, 6.0f);
     tc_renderer_draw_model(renderer, &entities->leg, model);
 
     if (item == TC_ITEM_NONE || tc_item_get(item) == NULL) {

@@ -1,4 +1,5 @@
 #include "thinkcraft/chunk.h"
+#include "thinkcraft/chunk_batch.h"
 #include "thinkcraft/chunk_mesh.h"
 #include "thinkcraft/mesh.h"
 #include "thinkcraft/terrain.h"
@@ -303,10 +304,54 @@ static int test_mesh_performance(void) {
     return ok;
 }
 
+static int test_batch_bake(void) {
+    tc_vertex source[2];
+    tc_vertex destination[2];
+    int ok = 1;
+
+    source[0].position[0] = 3;
+    source[0].position[1] = 7;
+    source[0].position[2] = 11;
+    source[0].uv[0] = 1;
+    source[0].uv[1] = 2;
+    source[0].shade = 200;
+    source[0].tile = 4;
+
+    source[1].position[0] = 16;
+    source[1].position[1] = 255;
+    source[1].position[2] = 16;
+    source[1].uv[0] = 3;
+    source[1].uv[1] = 5;
+    source[1].shade = 100;
+    source[1].tile = 9;
+
+    tc_batch_bake_vertices(destination, source, 2, 32768, 32770);
+
+    ok = ok && check(destination[0].position[0] == 32771,
+                     "baked x offset is wrong")
+      && check(destination[0].position[1] == 7,
+               "baked y was modified")
+      && check(destination[0].position[2] == 32781,
+               "baked z offset is wrong")
+      && check(destination[0].uv[0] == 1 && destination[0].uv[1] == 2,
+               "baked uv was modified")
+      && check(destination[0].shade == 200 && destination[0].tile == 4,
+               "baked face data was modified")
+      && check(destination[1].position[0] == 32784,
+               "second baked x offset is wrong")
+      && check(destination[1].position[2] == 32786,
+               "second baked z offset is wrong")
+      && check(destination[1].shade == 100 && destination[1].tile == 9,
+               "second baked face data was modified");
+
+    return ok;
+}
+
 int main(void) {
     int ok = 1;
 
     ok = ok && test_chunk_access();
+    ok = ok && test_batch_bake();
     ok = ok && test_greedy_cases();
     ok = ok && test_face_tiles();
     ok = ok && test_generated_mesh();

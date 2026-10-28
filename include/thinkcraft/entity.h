@@ -28,5 +28,8 @@ void tc_entity_draw_player(const tc_entity_renderer *entities,
                            tc_renderer *renderer, const tc_player *player,
                            uint16_t item, float swing, float walk_amount,
                            float walk_phase);
+void tc_entity_draw_block(const tc_entity_renderer *entities,
+                          tc_renderer *renderer, uint8_t block,
+                          const float position[3]);
 
 #endif

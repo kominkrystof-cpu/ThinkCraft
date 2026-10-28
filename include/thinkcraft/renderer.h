@@ -69,12 +69,17 @@ static inline void tc_renderer_fog_for_radius(int radius, float *start,
 void tc_renderer_begin_frame(tc_renderer *renderer, const float eye[3],
                              const float target[3], int framebuffer_width,
                              int framebuffer_height);
+void tc_renderer_set_chunk_origin(tc_renderer *renderer, float x, float y,
+                                  float z);
 void tc_renderer_draw_mesh(tc_renderer *renderer, const tc_render_mesh *mesh);
 void tc_renderer_begin_models(tc_renderer *renderer,
                               const float view_projection[16]);
 void tc_renderer_draw_model(tc_renderer *renderer,
                             const tc_render_mesh *mesh,
                             const float model[16]);
+void tc_renderer_draw_model_double_sided(tc_renderer *renderer,
+                                         const tc_render_mesh *mesh,
+                                         const float model[16]);
 void tc_renderer_end_models(tc_renderer *renderer);
 void tc_renderer_end_frame(tc_renderer *renderer);
 void tc_renderer_shutdown(tc_renderer *renderer);

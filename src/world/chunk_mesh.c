@@ -9,6 +9,17 @@
     (TC_CHUNK_SIZE_Y * (TC_CHUNK_SIZE_X > TC_CHUNK_SIZE_Z \
         ? TC_CHUNK_SIZE_X : TC_CHUNK_SIZE_Z))
 
+/* Padded neighborhood cache: the chunk plus one border block on every side.
+ * The mask fill reads flat memory from it instead of calling through the
+ * sampler for every voxel of every slice. */
+#define TC_CACHE_EDGE \
+    (TC_CHUNK_SIZE_X > TC_CHUNK_SIZE_Z ? TC_CHUNK_SIZE_X : TC_CHUNK_SIZE_Z)
+#define TC_CACHE_ROW (TC_CACHE_EDGE + 2)
+#define TC_CACHE_LAYER (TC_CACHE_ROW * TC_CACHE_ROW)
+#define TC_CACHE_CAPACITY (TC_CACHE_LAYER * (TC_CHUNK_SIZE_Y + 2))
+
+int tc_mesh_stats_scan_enabled = 1;
+
 static uint8_t to_byte(float value) {
     if (value <= 0.0f) {
         return 0;
@@ -19,13 +30,13 @@ static uint8_t to_byte(float value) {
     return (uint8_t)(value * 255.0f + 0.5f);
 }
 
-static uint8_t sample_block(const tc_chunk *chunk, tc_block_sampler sampler,
-                            const void *context, int x, int y, int z) {
-    if (sampler != NULL) {
-        return sampler(context, x, y, z);
-    }
-    return tc_chunk_get(chunk, x, y, z);
+static size_t tc_cache_index(int x, int y, int z) {
+    return (((size_t)(y + 1) * TC_CACHE_ROW + (size_t)(z + 1)) * TC_CACHE_ROW
+            + (size_t)(x + 1));
 }
+
+/* Stride of each physical axis inside the padded cache. */
+static const size_t tc_cache_stride[3] = {1, TC_CACHE_LAYER, TC_CACHE_ROW};
 
 static uint8_t block_face_tile(uint8_t block, int axis, int positive) {
     if (block == TC_BLOCK_GRASS) {
@@ -66,6 +77,7 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                                 tc_block_sampler sampler, const void *context,
                                 tc_mesh *mesh, tc_mesh_stats *stats_out) {
     int32_t mask[TC_CHUNK_MASK_CAPACITY];
+    uint8_t cache[TC_CACHE_CAPACITY];
     tc_mesh_stats stats = {0};
     int dimensions[3] = {
         TC_CHUNK_SIZE_X,
@@ -87,10 +99,12 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
     mesh->origin[2] = (float)chunk->origin_z;
 
     scan_start = tc_time_now();
-    stats.solid_blocks = tc_chunk_count_solid(chunk->blocks,
-                                              TC_CHUNK_BLOCK_COUNT);
-    stats.visible_faces = tc_chunk_visible_face_count_sampled(
-        chunk, sampler, context);
+    if (tc_mesh_stats_scan_enabled) {
+        stats.solid_blocks = tc_chunk_count_solid(chunk->blocks,
+                                                  TC_CHUNK_BLOCK_COUNT);
+        stats.visible_faces = tc_chunk_visible_face_count_sampled(
+            chunk, sampler, context);
+    }
     stats.scan_ms = (tc_time_now() - scan_start) * 1000.0;
     build_start = tc_time_now();
 
@@ -122,6 +136,46 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
 
     dimensions[1] = max_y + 1;
 
+    /* Fill the cache: interior bytes come straight from chunk->blocks, which is
+     * exactly what sample_chunk_block returns for in-range coordinates, and the
+     * one-block shell is sampled a few thousand times instead of once per
+     * voxel per slice. Cells outside y in [-1, max_y + 1] are never read. */
+    memset(cache, 0, (size_t)TC_CACHE_LAYER * (size_t)(max_y + 3));
+    for (int y = 0; y <= max_y; y++) {
+        const uint8_t *source = chunk->blocks
+            + (size_t)y * TC_CHUNK_SIZE_X * TC_CHUNK_SIZE_Z;
+        uint8_t *layer = cache + (size_t)(y + 1) * TC_CACHE_LAYER
+            + TC_CACHE_ROW + 1;
+
+        for (int z = 0; z < TC_CHUNK_SIZE_Z; z++) {
+            memcpy(layer + (size_t)z * TC_CACHE_ROW,
+                   source + (size_t)z * TC_CHUNK_SIZE_X,
+                   TC_CHUNK_SIZE_X);
+        }
+    }
+
+    if (sampler != NULL) {
+        for (int y = 0; y <= max_y; y++) {
+            for (int z = -1; z <= TC_CHUNK_SIZE_Z; z++) {
+                cache[tc_cache_index(-1, y, z)] = sampler(context, -1, y, z);
+                cache[tc_cache_index(TC_CHUNK_SIZE_X, y, z)] =
+                    sampler(context, TC_CHUNK_SIZE_X, y, z);
+            }
+            for (int x = 0; x < TC_CHUNK_SIZE_X; x++) {
+                cache[tc_cache_index(x, y, -1)] = sampler(context, x, y, -1);
+                cache[tc_cache_index(x, y, TC_CHUNK_SIZE_Z)] =
+                    sampler(context, x, y, TC_CHUNK_SIZE_Z);
+            }
+        }
+        for (int z = -1; z <= TC_CHUNK_SIZE_Z; z++) {
+            for (int x = -1; x <= TC_CHUNK_SIZE_X; x++) {
+                cache[tc_cache_index(x, -1, z)] = sampler(context, x, -1, z);
+                cache[tc_cache_index(x, max_y + 1, z)] =
+                    sampler(context, x, max_y + 1, z);
+            }
+        }
+    }
+
     for (int axis = 0; axis < 3; axis++) {
         int u = (axis + 1) % 3;
         int v = (axis + 2) % 3;
@@ -131,31 +185,25 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
         for (coordinate[axis] = -1;
              coordinate[axis] < dimensions[axis];
              coordinate[axis]++) {
+            const uint8_t *row_ptr = cache
+                + (size_t)(coordinate[axis] + 1) * tc_cache_stride[axis]
+                + tc_cache_stride[u] + tc_cache_stride[v];
+            size_t step_u = tc_cache_stride[u];
             int n = 0;
 
-            for (coordinate[v] = 0; coordinate[v] < mask_height;
-                 coordinate[v]++) {
-                for (coordinate[u] = 0; coordinate[u] < mask_width;
-                     coordinate[u]++, n++) {
-                    int neighbor_coordinate[3] = {
-                        coordinate[0],
-                        coordinate[1],
-                        coordinate[2]
-                    };
-                    uint8_t a;
-                    uint8_t b;
+            for (int j = 0; j < mask_height; j++) {
+                const uint8_t *a_ptr = row_ptr;
+                const uint8_t *b_ptr = row_ptr + tc_cache_stride[axis];
+
+                for (int i = 0; i < mask_width; i++, n++) {
+                    uint8_t a = *a_ptr;
+                    uint8_t b = *b_ptr;
                     int a_solid;
                     int b_solid;
 
-                    neighbor_coordinate[axis]++;
+                    a_ptr += step_u;
+                    b_ptr += step_u;
 
-                    a = sample_block(chunk, sampler, context,
-                                     coordinate[0], coordinate[1],
-                                     coordinate[2]);
-                    b = sample_block(chunk, sampler, context,
-                                     neighbor_coordinate[0],
-                                     neighbor_coordinate[1],
-                                     neighbor_coordinate[2]);
                     a_solid = tc_block_is_solid(a);
                     b_solid = tc_block_is_solid(b);
 
@@ -165,6 +213,8 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
                         mask[n] = 0;
                     }
                 }
+
+                row_ptr += tc_cache_stride[v];
             }
 
             n = 0;

@@ -16,6 +16,11 @@ typedef struct {
     double build_ms;
 } tc_mesh_stats;
 
+/* Nonzero (the default) makes tc_chunk_build_mesh*() run the solid-block and
+ * visible-face scans to fill stats. Set it to 0 during bulk remeshing to skip
+ * those two extra passes; quads, vertices, indices and build_ms stay valid. */
+extern int tc_mesh_stats_scan_enabled;
+
 int tc_chunk_build_mesh(const tc_chunk *chunk, tc_mesh *mesh,
                         tc_mesh_stats *stats);
 int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,

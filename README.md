@@ -2,7 +2,7 @@
 
 ThinkCraft is a lightweight, Minecraft-like engine written in C11 and x86-64 NASM. It uses OpenGL 3.3 core through GLFW and Glad, with a focus on predictable performance, a small dependency surface, and assembly hot paths.
 
-The project is currently an engine foundation with a playable first- and third-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring (81 chunks) of 16x256x16 voxel chunks around the player, generates domain-warped Perlin terrain with ridged mountains and 3D cave systems, meshes each chunk with neighbor-aware greedy meshing, and renders it with a procedural pixel-art texture atlas, a swept-AABB controller, a blocky player model with held items, block breaking and placing, survival stats, an unbreakable bedrock floor, distance fog, a main/pause menu, and persistent world saves.
+The project is currently an engine foundation with a playable first- and third-person demo, not a full Minecraft clone. The current milestone streams a 9x9 ring (81 chunks) of 16x256x16 voxel chunks around the player, generates domain-warped Perlin terrain with ridged mountains and 3D cave systems, meshes each chunk with neighbor-aware greedy meshing, and renders every visible chunk through one batched multi-draw with a procedural pixel-art texture atlas. It includes a swept-AABB controller, a blocky player model with held items, block breaking and placing, animated falling sand, survival stats, an unbreakable bedrock floor, distance fog, a main/pause menu, and persistent world saves.
 
 ## Status
 
@@ -11,15 +11,15 @@ The project is currently an engine foundation with a playable first- and third-p
 - Language: C11 with x86-64 NASM
 - Runtime: no JVM, no garbage collector, no engine scripting runtime
 - Target hardware: Intel UHD 620 / i3-10110U-class laptops
-- Target: stable 1000 FPS at 1920x1044 with vsync disabled
+- Target: stable 1000 FPS at 1920x1080 with vsync disabled
 
-The current streaming-world benchmark runs at roughly 1,250 FPS at 1280x720 and 560 FPS at 1920x1044 on the development Intel UHD 620 machine with vsync disabled. It renders a 9x9 ring around the player, rejects chunks outside the frustum or beyond the fog distance (roughly 33 visible chunks at spawn), draws visible chunks front-to-back, spreads boundary remeshing across frames when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
+The current streaming-world benchmark runs at roughly 1,070 FPS at 1280x720 and 500 FPS at 1920x1080 on the development Intel UHD 620 machine with vsync disabled. It renders a 9x9 ring around the player, rejects chunks outside the frustum or beyond the fog distance (roughly 33 visible chunks at spawn), draws all visible chunks with a single `glMultiDrawElements` call, spreads boundary remeshing across frames when the player crosses a chunk edge, and uses distance fog to hide the streaming boundary.
 
 ## Current Milestone: Persistent Worlds, Terrain, and Rendering
 
-This milestone combines durable world state with a new terrain generator, swept collision, and a compact render path. ThinkCraft boots into a main menu, supports New World and Continue, exposes a pause menu, renders UI text without external assets, and stores seeds, player pose, hotbar selection, and block edits in a versioned binary save. Terrain is generated from hash-based 2D/3D Perlin noise with domain warping, ridged mountains, beaches, and caves. Movement uses swept AABB contact resolution with 12-step bisection and 0.125-block substeps. Chunk meshes use packed 10-byte vertices and a per-chunk origin uniform.
+This milestone combines durable world state with a new terrain generator, swept collision, and a compact render path. ThinkCraft boots into a main menu, supports New World and Continue, exposes a pause menu, renders UI text without external assets, and stores seeds, player pose, hotbar selection, and block edits in a versioned binary save. Terrain is generated from hash-based 2D/3D Perlin noise with domain warping, ridged mountains, beaches, and caves. Movement uses swept AABB contact resolution with 12-step bisection and 0.125-block substeps. Chunk meshes use packed 10-byte vertices, batches share one large VBO/EBO, and unsupported sand falls as an animated entity before landing as a block.
 
-- 1920x1044 OpenGL 3.3 core window (default, configurable)
+- 1920x1080 OpenGL 3.3 core window (default, configurable)
 - GLFW window creation, key-state input, mouse capture, and clean shutdown
 - Glad-generated OpenGL loader
 - Shader loading and compilation with error reporting
@@ -33,8 +33,11 @@ This milestone combines durable world state with a new terrain generator, swept 
 - Budgeted dirty-slot remeshing with priority edits and deferred neighbor updates
 - Neighbor-aware greedy meshing across all three axes with internal-face culling
 - Initial world reduced from 106,078 visible faces to 26,780 quads (3.96x)
-- 81 per-chunk textured meshes uploaded to VBOs and EBOs with packed 10-byte vertices
-- Frustum culling, fog-distance chunk rejection, and front-to-back drawing (roughly 33 of 81 chunks visible at spawn)
+- All chunk meshes share one VBO and one EBO with packed 10-byte vertices
+- NASM batch vertex baking that applies the chunk-origin bias while copying
+- Single `glMultiDrawElements` call for every visible chunk (roughly 33 of 81 at spawn)
+- Frustum culling, fog-distance chunk rejection, and front-to-back slot ordering
+- Animated falling sand with substeps, column cascades, and landing as a block
 - Procedural 128x128 RGBA atlas uploaded as a 17-layer 2D texture array of 16x16 tiles
 - Textured grass, dirt, stone, sand, and bedrock with per-face shading
 - Procedural tool icons plus skin, shirt, pants, hair, and face tiles
@@ -63,6 +66,7 @@ This milestone combines durable world state with a new terrain generator, swept 
 - `tc_mat4_mul` implemented in x86-64 NASM
 - `tc_chunk_count_solid` implemented in x86-64 NASM
 - `tc_asm_aabb_collides` implemented in x86-64 NASM for the player collision hot path
+- `tc_batch_bake_vertices` implemented in x86-64 NASM for chunk batch uploads
 - Frame-time and FPS reporting
 - Automated render benchmark and mesh benchmark output
 - Chunk, world, save, player, texture, raycast, and mesh tests covering
@@ -207,7 +211,7 @@ A save stores:
 - Survival health, hunger, and exhaustion
 - An ordered log of block edits, including negative coordinates
 
-The current format is little-endian `TCSV` version 4. It has a 64-byte header followed by 36 eight-byte inventory records, one eight-byte cursor record, and 13-byte edit records (`i32 x`, `i32 y`, `i32 z`, `u8 block`). Inventory records store `u16 item`, `u16 count`, `u16 durability`, and a reserved `u16`. The version 4 header stores health at offset 48, hunger at 52, exhaustion at 56, and a reserved word at 60. Reads validate the magic, version, edit count, player pose, game mode, survival ranges, every item stack, and block coordinates before applying anything. Version 3 saves are accepted with full health and hunger defaults, so existing worlds load unchanged. Version 1 and 2 saves are rejected. Edits are replayed after chunk regeneration, which makes them survive both streaming reloads and new sessions.
+The current format is little-endian `TCSV` version 4. It has a 64-byte header followed by 36 eight-byte inventory records, one eight-byte cursor record, and 13-byte edit records (`i32 x`, `i32 y`, `i32 z`, `u8 block`). Inventory records store `u16 item`, `u16 count`, `u16 durability`, and a reserved `u16`. The version 4 header stores health at offset 48, hunger at 52, exhaustion at 56, and a reserved word at 60. Reads validate the magic, version, edit count, player pose, game mode, survival ranges, every item stack, and block coordinates before applying anything. Version 3 saves are accepted with full health and hunger defaults, so existing worlds load unchanged. Version 1 and 2 saves are rejected. Edits are replayed after chunk regeneration, which makes them survive both streaming reloads and new sessions. In-flight falling sand is settled into blocks before the save is written, so mid-air sand cannot be lost; after loading, touched edit cells wake any sand left unsupported.
 
 ## Benchmark
 
@@ -218,7 +222,7 @@ make benchmark
 Equivalent to:
 
 ```sh
-./build/engine/thinkcraft --benchmark --seconds 10
+./build/engine/thinkcraft --width 1920 --height 1080 --benchmark --seconds 10
 ```
 
 Example with a custom resolution:
@@ -235,7 +239,7 @@ The benchmark prints the elapsed time, total frames, average FPS, average millis
 make test
 ```
 
-`make test` runs the portable math, chunk-mesh, world, save, player, texture, raycast, inventory, and survival test suites.
+`make test` runs the portable math, chunk-mesh, world, save, player, texture, raycast, inventory, survival, and falling-sand test suites.
 
 Individual test targets:
 
@@ -249,9 +253,10 @@ make test-texture
 make test-raycast
 make test-inventory
 make test-survival
+make test-falling
 ```
 
-The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, packed local positions, mesh origins, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic Perlin terrain reloads, world-space block access, seed stability, cave generation without surface breaches, per-chunk rendering bounds, neighbor-aware boundary culling, and edit replay after chunk reload. The save test covers binary round trips, inventory and game-mode persistence, survival-stat persistence, version 3 compatibility with full-health defaults, negative edit coordinates, applying a save to a regenerated world, persistence through chunk unload/reload, and rejection of version 2 saves. The player test covers gravity, ground contact, jumping, wall collision, high-speed tunneling, ceiling contact, one-block auto-step, negative-coordinate walls, diagonal wall sliding, void-floor collision, surface spawning, pitch clamping, yaw wrapping, creative flight, spectator noclip, crouch edge protection, fall damage, and NASM collision bounds across negative and chunk-edge coordinates. The survival test covers damage and healing caps, death, fall damage, exhaustion, regeneration, and starvation. The inventory test covers item stats, stacking, overflow, splitting, quick move, consumption, and tool durability. The texture test verifies atlas layout, tile variation, opaque terrain and player tiles, transparent tool backgrounds, face details, and the expected grass, dirt, stone, sand, and bedrock palettes. The raycast test covers forward and negative-coordinate voxel hits, hit distances, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected. The world test regenerates terrain under different seeds and verifies that the bedrock floor cannot be broken or replaced.
+The math test compares the NASM matrix multiplication against a scalar C reference and checks perspective, view matrices, and negative-coordinate floor division. The chunk test covers chunk access, solid counting in NASM, greedy merge cases, index bounds, face reduction, packed local positions, mesh origins, NASM batch vertex baking, and a 32-build meshing benchmark. The world test covers streaming updates, negative chunk coordinates, deterministic Perlin terrain reloads, world-space block access, seed stability, cave generation without surface breaches, per-chunk rendering bounds, neighbor-aware boundary culling, and edit replay after chunk reload. The save test covers binary round trips, inventory and game-mode persistence, survival-stat persistence, version 3 compatibility with full-health defaults, negative edit coordinates, applying a save to a regenerated world, persistence through chunk unload/reload, and rejection of version 2 saves. The player test covers gravity, ground contact, jumping, wall collision, high-speed tunneling, ceiling contact, one-block auto-step, negative-coordinate walls, diagonal wall sliding, void-floor collision, surface spawning, pitch clamping, yaw wrapping, creative flight, spectator noclip, crouch edge protection, fall damage, and NASM collision bounds across negative and chunk-edge coordinates. The falling-sand test covers gravity, terminal velocity, single-block landing, cascading columns, supported blocks staying put, and settling all in-flight sand. The survival test covers damage and healing caps, death, fall damage, exhaustion, regeneration, and starvation. The inventory test covers item stats, stacking, overflow, splitting, quick move, consumption, and tool durability. The texture test verifies atlas layout, tile variation, opaque terrain and player tiles, transparent tool backgrounds, face details, and the expected grass, dirt, stone, sand, and bedrock palettes. The raycast test covers forward and negative-coordinate voxel hits, hit distances, starting inside a block, placement-cell selection, misses, and reach limits. The player test also verifies that placement cells overlapping the player are rejected. The world test regenerates terrain under different seeds and verifies that the bedrock floor cannot be broken or replaced.
 
 To run all test suites, including inventory, survival, and the optional transpiler tests:
 
@@ -274,10 +279,10 @@ include/thinkcraft/     Public engine headers
 src/main.c              Entry point
 src/app.c               Application loop and command-line handling
 src/core/               Arena allocator, logging, platform helpers
-src/gfx/                Window, shader, mesh, renderer, HUD, and atlas code
+src/gfx/                Window, shader, mesh, batched chunk renderer, HUD, and atlas code
 src/math/               Matrix math in C
 src/player/             First-person movement, crouch edge protection, and voxel collision
-src/world/              Chunk storage, streaming world, terrain, raycasting, meshing, and saves
+src/world/              Chunk storage, streaming world, terrain, raycasting, meshing, falling blocks, and saves
 src/asm/                NASM hot paths
 shaders/                GLSL shaders
 third_party/glad/       Vendored Glad 3.3 core loader
@@ -304,15 +309,14 @@ scripts/                Development helper scripts
 
 ## Performance Notes
 
-The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, frustum culling, fog-distance chunk rejection, front-to-back drawing with early depth rejection, one indexed draw per visible chunk, packed 10-byte vertices, a per-chunk origin uniform, a nearest-filtered 2D texture array, per-vertex fog, reusable VAO/VBO/EBO state across draws, a direct-mapped 9x9 streaming ring, priority remeshing after block edits, and a per-frame remesh budget. Important planned work includes:
+The project targets frame times that leave headroom on integrated graphics rather than merely hitting a benchmark number. The current path uses flat `uint8_t` block arrays, an inline index, a three-axis greedy mask, neighbor-aware sampling across chunk borders, frustum culling, fog-distance chunk rejection, front-to-back slot ordering with early depth rejection, one `glMultiDrawElements` call for all visible chunks, a shared VBO/EBO with CPU shadow copy and waste compaction, packed 10-byte vertices, NASM-origin-biased batch uploads, a per-frame batch origin uniform, a nearest-filtered 2D texture array, per-vertex fog, a direct-mapped 9x9 streaming ring, priority remeshing after block edits, and a per-frame remesh budget. Falling sand runs as a small fixed-capacity entity array with bottom-up column processing and fixed substeps. Important planned work includes:
 
 - Occlusion culling and more precise chunk visibility scheduling
-- Batching visible chunks into fewer draw calls
 - Worker-thread and multithreaded mesh generation
 - Larger render distances with level-of-detail terrain
 - Native assembly paths only for verified hotspots
 
-The current benchmark streams 81 chunks around the player and renders roughly 33 after frustum and fog-distance culling. At startup the streaming ring has 281,328 solid blocks and 106,078 visible faces reduced to 26,780 quads; initial mesh building takes roughly 38 to 40 ms total on the development machine. New chunks are generated and remeshed under a 3 ms per-frame budget. A block edit rebuilds its chunk immediately, while border neighbors are deferred to the next frames. Rendering averages roughly 1,250 FPS at 1280x720, 2,200 FPS at 800x450, and 560 FPS at 1920x1044 on the development machine. The 1920x1044 path is fillrate-bound and remains below the 1000 FPS target. High-resolution performance is dominated by final framebuffer fill; optional internal render scaling is available, but the full-resolution upscale still writes every output pixel, so it is not a substitute for reducing overdraw.
+The current benchmark streams 81 chunks around the player and renders roughly 33 after frustum and fog-distance culling. At startup the streaming ring has 281,328 solid blocks and 106,078 visible faces reduced to 26,780 quads; initial mesh building takes roughly 38 to 40 ms total on the development machine. New chunks are generated and remeshed under a 3 ms per-frame budget. A block edit rebuilds its chunk immediately, while border neighbors are deferred to the next frames. All 81 uploaded chunks are submitted as one multi-draw. Rendering averages roughly 1,070 FPS at 1280x720, 2,320 FPS at 800x450, and 500 FPS at 1920x1080 on the development machine. The 1920x1080 path is fillrate-bound and remains below the 1000 FPS target. High-resolution performance is dominated by final framebuffer fill; optional internal render scaling is available, but the full-resolution upscale still writes every output pixel, so it is not a substitute for reducing overdraw.
 
 ## Optional Transpiler Experiment
 
@@ -372,9 +376,10 @@ See `THIRD_PARTY_NOTICES.md` for a summary.
 - [x] Crouch block-edge protection
 - [x] Batched HUD quad rendering
 - [x] NASM AABB collision hot path
+- [x] Batched multi-chunk drawing with one shared VBO/EBO and NASM vertex baking
+- [x] Animated falling sand with column cascades and save settling
 - [ ] Biomes and structures
 - [ ] Occlusion culling and chunk visibility scheduling
-- [ ] Batched multi-chunk drawing
 - [ ] Multithreaded mesh building
 - [ ] Larger render distance with level-of-detail terrain
 - [ ] Portable release packaging

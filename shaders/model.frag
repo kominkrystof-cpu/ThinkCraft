@@ -9,7 +9,13 @@ uniform sampler2DArray u_texture;
 out vec4 frag_color;
 
 void main() {
-    vec4 texel = texture(u_texture, vec3(v_uv, float(v_tile)));
+    vec2 uv = v_uv;
+
+    if (!gl_FrontFacing) {
+        uv.x = 1.0 - uv.x;
+    }
+
+    vec4 texel = texture(u_texture, vec3(uv, float(v_tile)));
 
     if (texel.a < 0.05) {
         discard;

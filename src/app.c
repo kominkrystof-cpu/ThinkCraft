@@ -1,6 +1,8 @@
 #include "thinkcraft/app.h"
 #include "thinkcraft/arena.h"
+#include "thinkcraft/chunk_batch.h"
 #include "thinkcraft/entity.h"
+#include "thinkcraft/falling.h"
 #include "thinkcraft/hud.h"
 #include "thinkcraft/inventory.h"
 #include "thinkcraft/item.h"
@@ -322,7 +324,7 @@ static void print_help(const char *program) {
     printf("\n");
     printf("Options:\n");
     printf("  --width N       Window width in pixels (default 1920)\n");
-    printf("  --height N      Window height in pixels (default 1044)\n");
+    printf("  --height N      Window height in pixels (default 1080)\n");
     printf("  --vsync         Enable vertical sync\n");
     printf("  --no-vsync      Disable vertical sync (default in benchmark mode)\n");
     printf("  --benchmark     Exit after the benchmark duration\n");
@@ -373,7 +375,7 @@ static int copy_path(char *buffer, size_t size, const char *value,
 
 static int parse_options(int argc, char **argv, app_options *options) {
     options->width = 1920;
-    options->height = 1044;
+    options->height = 1080;
     options->vsync_set = 0;
     options->benchmark = 0;
     options->benchmark_seconds = 10.0;
@@ -598,15 +600,15 @@ static int resolve_shader_dir(char *buffer, size_t size) {
     return tc_path_exists("shaders/basic.vert");
 }
 
-static int rebuild_slot_mesh(tc_world *world, tc_renderer *renderer,
-                             tc_mesh *mesh, tc_render_mesh *render_mesh,
+static int rebuild_slot_mesh(tc_world *world, tc_mesh *mesh,
+                             tc_chunk_batch *batch, size_t slot_index,
                              tc_world_slot *slot, tc_mesh_stats *totals,
                              size_t *remeshed) {
     tc_mesh_stats chunk_stats;
 
     if (!tc_world_build_chunk_mesh(world, slot->chunk_x, slot->chunk_z, mesh,
                                    &chunk_stats)
-        || !tc_renderer_upload_mesh(renderer, render_mesh, mesh)) {
+        || !tc_chunk_batch_upload(batch, (int)slot_index, mesh)) {
         return 0;
     }
 
@@ -622,12 +624,11 @@ static int rebuild_slot_mesh(tc_world *world, tc_renderer *renderer,
     return 1;
 }
 
-static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
-                                tc_mesh *mesh, tc_render_mesh *render_meshes,
-                                size_t max_chunks, double time_budget_ms,
-                                int priority_index, tc_mesh_stats *stats,
-                                size_t *remeshed_out, size_t *pending_out,
-                                size_t *draw_calls_out) {
+static int rebuild_dirty_chunks(tc_world *world, tc_mesh *mesh,
+                                tc_chunk_batch *batch, size_t max_chunks,
+                                double time_budget_ms, int priority_index,
+                                tc_mesh_stats *stats, size_t *remeshed_out,
+                                size_t *pending_out, size_t *draw_calls_out) {
     tc_mesh_stats totals = {0};
     size_t slot_count;
     size_t remeshed = 0;
@@ -636,8 +637,7 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
     double start;
     int limit_reached = 0;
 
-    if (world == NULL || renderer == NULL || mesh == NULL
-        || render_meshes == NULL || stats == NULL) {
+    if (world == NULL || mesh == NULL || batch == NULL || stats == NULL) {
         return 0;
     }
 
@@ -648,13 +648,11 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
         tc_world_slot *slot = &world->slots[priority_index];
 
         if (!slot->loaded) {
-            if (render_meshes[priority_index].vao != 0) {
-                tc_renderer_destroy_mesh(&render_meshes[priority_index]);
-            }
+            tc_chunk_batch_clear(batch, priority_index);
         } else if (slot->dirty) {
-            if (!rebuild_slot_mesh(world, renderer, mesh,
-                                   &render_meshes[priority_index], slot,
-                                   &totals, &remeshed)) {
+            if (!rebuild_slot_mesh(world, mesh, batch,
+                                   (size_t)priority_index, slot, &totals,
+                                   &remeshed)) {
                 return 0;
             }
         }
@@ -669,9 +667,7 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
 
         slot = &world->slots[index];
         if (!slot->loaded) {
-            if (render_meshes[index].vao != 0) {
-                tc_renderer_destroy_mesh(&render_meshes[index]);
-            }
+            tc_chunk_batch_clear(batch, (int)index);
             continue;
         }
 
@@ -691,14 +687,14 @@ static int rebuild_dirty_chunks(tc_world *world, tc_renderer *renderer,
             continue;
         }
 
-        if (!rebuild_slot_mesh(world, renderer, mesh, &render_meshes[index],
-                               slot, &totals, &remeshed)) {
+        if (!rebuild_slot_mesh(world, mesh, batch, index, slot, &totals,
+                               &remeshed)) {
             return 0;
         }
     }
 
     for (size_t index = 0; index < slot_count; index++) {
-        if (render_meshes[index].index_count > 0) {
+        if (tc_chunk_batch_index_count(batch, (int)index) > 0) {
             draw_calls++;
         }
     }
@@ -830,10 +826,11 @@ static float chunk_distance_sq(const tc_world *world, size_t index,
     return dx * dx + dz * dz;
 }
 
-static int apply_block_edit(tc_world *world, tc_renderer *renderer,
-                            tc_mesh *mesh, tc_render_mesh *render_meshes,
-                            size_t *draw_calls, int x, int y, int z,
-                            uint8_t block, double *remesh_ms_out) {
+static int apply_block_edit(tc_world *world, tc_mesh *mesh,
+                            tc_chunk_batch *batch,
+                            tc_falling_blocks *falling, size_t *draw_calls,
+                            int x, int y, int z, uint8_t block,
+                            double *remesh_ms_out) {
     tc_mesh_stats stats;
     size_t remeshed = 0;
     size_t pending = 0;
@@ -846,14 +843,15 @@ static int apply_block_edit(tc_world *world, tc_renderer *renderer,
         return 0;
     }
 
+    tc_falling_notify_block_changed(falling, world, x, y, z);
+
     chunk_x = tc_math_floor_div(x, TC_CHUNK_SIZE_X);
     chunk_z = tc_math_floor_div(z, TC_CHUNK_SIZE_Z);
     priority_index = find_slot_index(world, chunk_x, chunk_z);
     start = tc_time_now();
 
-    if (!rebuild_dirty_chunks(world, renderer, mesh, render_meshes, 1, 0.0,
-                              priority_index, &stats, &remeshed, &pending,
-                              draw_calls)) {
+    if (!rebuild_dirty_chunks(world, mesh, batch, 1, 0.0, priority_index,
+                              &stats, &remeshed, &pending, draw_calls)) {
         return 0;
     }
 
@@ -889,9 +887,8 @@ static void app_menu_get(app_state state, int has_continue,
     }
 }
 
-static int rebuild_all_world_meshes(tc_world *world, tc_renderer *renderer,
-                                    tc_mesh *mesh,
-                                    tc_render_mesh *render_meshes,
+static int rebuild_all_world_meshes(tc_world *world, tc_mesh *mesh,
+                                    tc_chunk_batch *batch,
                                     size_t *draw_calls) {
     tc_mesh_stats stats;
     size_t remeshed = 0;
@@ -904,14 +901,13 @@ static int rebuild_all_world_meshes(tc_world *world, tc_renderer *renderer,
         }
     }
 
-    return rebuild_dirty_chunks(world, renderer, mesh, render_meshes, SIZE_MAX,
-                                0.0, -1, &stats, &remeshed, &pending,
-                                draw_calls);
+    return rebuild_dirty_chunks(world, mesh, batch, SIZE_MAX, 0.0, -1, &stats,
+                                &remeshed, &pending, draw_calls);
 }
 
 static int start_new_world(tc_world *world, tc_player *player, uint32_t seed,
-                           int *selected_hotbar, tc_renderer *renderer,
-                           tc_mesh *mesh, tc_render_mesh *render_meshes,
+                           int *selected_hotbar, tc_mesh *mesh,
+                           tc_chunk_batch *batch, tc_falling_blocks *falling,
                            size_t *draw_calls) {
     tc_world_set_seed(world, seed);
     if (!tc_world_update(world, 0, 0)) {
@@ -922,14 +918,22 @@ static int start_new_world(tc_world *world, tc_player *player, uint32_t seed,
         return 0;
     }
 
+    tc_falling_init(falling);
     *selected_hotbar = 0;
-    return rebuild_all_world_meshes(world, renderer, mesh, render_meshes,
-                                    draw_calls);
+    if (!tc_chunk_batch_rebase(batch, (int)floorf(player->position[0]),
+                               (int)floorf(player->position[2]))) {
+        return 0;
+    }
+    return rebuild_all_world_meshes(world, mesh, batch, draw_calls);
 }
 
-static int save_game(const app_options *options, const tc_world *world,
-                     const tc_player *player, const tc_inventory *inventory,
-                     tc_game_mode game_mode) {
+static int save_game(const app_options *options, tc_world *world,
+                     tc_falling_blocks *falling, const tc_player *player,
+                     const tc_inventory *inventory, tc_game_mode game_mode) {
+    /* Falling sand lives in transient entities. Settle it first so a save
+     * never drops blocks that happened to be mid-air. */
+    tc_falling_settle_all(falling, world);
+
     if (!tc_save_write(options->save_path, world, player, inventory,
                        game_mode)) {
         return 0;
@@ -943,8 +947,8 @@ static int save_game(const app_options *options, const tc_world *world,
 static int load_game(const app_options *options, tc_world *world,
                      tc_player *player, int *selected_hotbar,
                      tc_inventory *inventory, tc_game_mode *game_mode,
-                     tc_renderer *renderer, tc_mesh *mesh,
-                     tc_render_mesh *render_meshes, size_t *draw_calls) {
+                     tc_mesh *mesh, tc_chunk_batch *batch,
+                     tc_falling_blocks *falling, size_t *draw_calls) {
     tc_save_data data;
     uint32_t seed;
     size_t edit_count;
@@ -961,6 +965,7 @@ static int load_game(const app_options *options, tc_world *world,
     }
 
     tc_world_set_seed(world, data.seed);
+    tc_falling_init(falling);
     center_chunk_x = tc_math_floor_div((int)floorf(data.position[0]),
                                        TC_CHUNK_SIZE_X);
     center_chunk_z = tc_math_floor_div((int)floorf(data.position[2]),
@@ -994,10 +999,23 @@ static int load_game(const app_options *options, tc_world *world,
     *selected_hotbar = data.selected_hotbar;
     seed = data.seed;
     edit_count = tc_world_edit_count(world);
+
+    /* Re-check saved edits against the final world so any sand that is no
+     * longer supported starts falling instead of hanging in place. */
+    for (size_t index = 0; index < data.edit_count; index++) {
+        const tc_world_edit *edit = &data.edits[index];
+
+        tc_falling_notify_block_changed(falling, world, edit->x, edit->y,
+                                        edit->z);
+    }
     tc_save_data_shutdown(&data);
 
-    if (!rebuild_all_world_meshes(world, renderer, mesh, render_meshes,
-                                  draw_calls)) {
+    if (!tc_chunk_batch_rebase(batch, (int)floorf(player->position[0]),
+                               (int)floorf(player->position[2]))) {
+        return 0;
+    }
+
+    if (!rebuild_all_world_meshes(world, mesh, batch, draw_calls)) {
         return 0;
     }
 
@@ -1241,7 +1259,8 @@ int tc_app_run(int argc, char **argv) {
     tc_renderer renderer;
     tc_entity_renderer entities;
     tc_text_renderer text;
-    tc_render_mesh *render_meshes = NULL;
+    tc_chunk_batch chunk_batch;
+    tc_falling_blocks falling;
     size_t *draw_order = NULL;
     float *draw_distances = NULL;
     app_options options;
@@ -1256,7 +1275,6 @@ int tc_app_run(int argc, char **argv) {
     double elapsed;
     double total_elapsed = 0.0;
     double average_fps = 0.0;
-    double mesh_reduction = 0.0;
     size_t slot_count = 0;
     size_t initial_remeshed = 0;
     size_t initial_pending = 0;
@@ -1292,6 +1310,7 @@ int tc_app_run(int argc, char **argv) {
     int text_initialized = 0;
     int hud_initialized = 0;
     int mesh_initialized = 0;
+    int chunk_batch_initialized = 0;
     int exit_code = 1;
     float render_scale = 1.0f;
     float fog_start = TC_RENDER_FOG_START;
@@ -1304,6 +1323,11 @@ int tc_app_run(int argc, char **argv) {
     if (parse_result == 0) {
         return 0;
     }
+
+    /* World load and streaming rebuild many chunks per frame, so skip the
+     * solid-block and visible-face scan passes there. quads, vertices,
+     * indices and build_ms are still filled in by the mesh builder itself. */
+    tc_mesh_stats_scan_enabled = 0;
 
     memset(&status, 0, sizeof(status));
     state = options.benchmark ? APP_STATE_PLAYING : APP_STATE_MENU;
@@ -1407,18 +1431,17 @@ int tc_app_run(int argc, char **argv) {
                 options.settings.vsync ? "on" : "off",
                 options.settings.fps_cap, options.settings.sensitivity);
 
-    if (slot_count > SIZE_MAX / sizeof(*render_meshes)) {
-        tc_log_error("too many world slots");
+    if (slot_count > TC_CHUNK_BATCH_MAX_SLOTS) {
+        tc_log_error("too many world slots for the chunk batcher");
         goto cleanup;
     }
 
-    render_meshes = tc_arena_alloc(&arena,
-                                   slot_count * sizeof(*render_meshes));
-    if (render_meshes == NULL) {
-        tc_log_error("failed to allocate render meshes");
+    if (!tc_chunk_batch_init(&chunk_batch, (int)slot_count)) {
+        tc_log_error("failed to initialize the chunk batcher");
         goto cleanup;
     }
-    memset(render_meshes, 0, slot_count * sizeof(*render_meshes));
+    chunk_batch_initialized = 1;
+    tc_falling_init(&falling);
 
     if (slot_count > SIZE_MAX / sizeof(*draw_order)) {
         tc_log_error("too many draw order entries");
@@ -1446,7 +1469,7 @@ int tc_app_run(int argc, char **argv) {
     tc_mesh_init(&mesh);
     mesh_initialized = 1;
 
-    if (!rebuild_dirty_chunks(&world, &renderer, &mesh, render_meshes,
+    if (!rebuild_dirty_chunks(&world, &mesh, &chunk_batch,
                               SIZE_MAX, 0.0, -1, &initial_stats,
                               &initial_remeshed, &initial_pending,
                               &draw_calls)) {
@@ -1454,24 +1477,30 @@ int tc_app_run(int argc, char **argv) {
         goto cleanup;
     }
 
-    if (initial_stats.quads > 0) {
-        mesh_reduction = (double)initial_stats.visible_faces
-                       / (double)initial_stats.quads;
+    /* The scan passes are off, so the solid-block total comes from the running
+     * count the chunks maintain instead of a re-count of every block. */
+    {
+        size_t solid_blocks = 0;
+
+        for (size_t index = 0; index < slot_count; index++) {
+            if (world.slots[index].loaded) {
+                solid_blocks += world.slots[index].chunk.solid_count;
+            }
+        }
+
+        tc_log_info("world mesh: %zu solid blocks, %zu quads, %zu vertices, "
+                    "%zu indices",
+                    solid_blocks, initial_stats.quads, initial_stats.vertices,
+                    initial_stats.indices);
     }
 
-    tc_log_info("world mesh: %zu solid blocks, %zu visible faces -> "
-                "%zu quads (%.2fx), %zu vertices, %zu indices",
-                initial_stats.solid_blocks, initial_stats.visible_faces,
-                initial_stats.quads, mesh_reduction,
-                initial_stats.vertices, initial_stats.indices);
-    tc_log_info("mesh build: %.2f ms total, %.2f ms average per chunk "
-                "(visibility scan %.2f ms)",
+    tc_log_info("mesh build: %.2f ms total, %.2f ms average per chunk",
                 initial_stats.build_ms,
                 initial_remeshed > 0
                     ? initial_stats.build_ms / (double)initial_remeshed
-                    : 0.0,
-                initial_stats.scan_ms);
-    tc_log_info("%zu chunks, %zu draw calls", initial_remeshed, draw_calls);
+                    : 0.0);
+    tc_log_info("%zu chunks uploaded, %zu non-empty slots, batched into 1 "
+                "multi-draw", initial_remeshed, draw_calls);
 
     if (!options.benchmark) {
         tc_log_info("controls: WASD move, mouse look, Space jump/fly up, "
@@ -1607,7 +1636,8 @@ int tc_app_run(int argc, char **argv) {
 
         if (tc_window_key_pressed(&window, TC_KEY_F6)
             && state != APP_STATE_MENU && state != APP_STATE_DEAD) {
-            if (save_game(&options, &world, &player, &inventory, game_mode)) {
+            if (save_game(&options, &world, &falling, &player, &inventory,
+                          game_mode)) {
                 main_menu_has_continue = 1;
                 app_status_set(&status, now, 0.55f, 0.95f, 0.55f, "SAVED");
             } else {
@@ -1619,8 +1649,8 @@ int tc_app_run(int argc, char **argv) {
         if (tc_window_key_pressed(&window, TC_KEY_F9)
             && state != APP_STATE_MENU && state != APP_STATE_DEAD) {
             if (load_game(&options, &world, &player, &selected_hotbar,
-                          &inventory, &game_mode, &renderer, &mesh,
-                          render_meshes, &draw_calls)) {
+                          &inventory, &game_mode, &mesh, &chunk_batch,
+                          &falling, &draw_calls)) {
                 state = APP_STATE_PLAYING;
                 main_menu_has_continue = 1;
                 menu_selection = 0;
@@ -1658,8 +1688,8 @@ int tc_app_run(int argc, char **argv) {
                 switch (action) {
                     case MENU_NEW_WORLD:
                         if (start_new_world(&world, &player, options.seed,
-                                            &selected_hotbar, &renderer,
-                                            &mesh, render_meshes,
+                                            &selected_hotbar, &mesh,
+                                            &chunk_batch, &falling,
                                             &draw_calls)) {
                             state = APP_STATE_PLAYING;
                             selected_hotbar = 0;
@@ -1677,8 +1707,8 @@ int tc_app_run(int argc, char **argv) {
                     case MENU_LOAD:
                         if (load_game(&options, &world, &player,
                                       &selected_hotbar, &inventory,
-                                      &game_mode, &renderer, &mesh,
-                                      render_meshes, &draw_calls)) {
+                                      &game_mode, &mesh, &chunk_batch,
+                                      &falling, &draw_calls)) {
                             state = APP_STATE_PLAYING;
                             main_menu_has_continue = 1;
                             menu_selection = 0;
@@ -1690,8 +1720,8 @@ int tc_app_run(int argc, char **argv) {
                         }
                         break;
                     case MENU_SAVE:
-                        if (save_game(&options, &world, &player, &inventory,
-                                      game_mode)) {
+                        if (save_game(&options, &world, &falling, &player,
+                                      &inventory, game_mode)) {
                             main_menu_has_continue = 1;
                             app_status_set(&status, now, 0.55f, 0.95f, 0.55f,
                                            "SAVED");
@@ -1796,6 +1826,15 @@ int tc_app_run(int argc, char **argv) {
                 walk_amount += (target_walk - walk_amount) * blend;
             }
 
+            {
+                int falling_landed = tc_falling_update(&falling, &world,
+                                                       (float)dt);
+
+                if (falling_landed > 0) {
+                    edited = 1;
+                }
+            }
+
             if (player.position[1] < -32.0f) {
                 float position[3] = {spawn_x, 40.0f, spawn_z};
 
@@ -1829,6 +1868,16 @@ int tc_app_run(int argc, char **argv) {
                                 "in %.2f ms",
                                 center_chunk_x, center_chunk_z,
                                 (tc_time_now() - stream_start) * 1000.0);
+                }
+            }
+
+            if (tc_chunk_batch_should_rebase(&chunk_batch,
+                                             center_chunk_x * TC_CHUNK_SIZE_X,
+                                             center_chunk_z * TC_CHUNK_SIZE_Z)) {
+                if (!tc_chunk_batch_rebase(&chunk_batch,
+                                           center_chunk_x * TC_CHUNK_SIZE_X,
+                                           center_chunk_z * TC_CHUNK_SIZE_Z)) {
+                    tc_log_error("chunk batch rebase failed");
                 }
             }
         }
@@ -1889,8 +1938,8 @@ int tc_app_run(int argc, char **argv) {
                                           hit.previous_z) == TC_BLOCK_AIR) {
                     double remesh_ms = 0.0;
 
-                    if (apply_block_edit(&world, &renderer, &mesh,
-                                         render_meshes, &draw_calls,
+                    if (apply_block_edit(&world, &mesh, &chunk_batch,
+                                         &falling, &draw_calls,
                                          hit.previous_x, hit.previous_y,
                                          hit.previous_z, block, &remesh_ms)) {
                         edited = 1;
@@ -1915,8 +1964,8 @@ int tc_app_run(int argc, char **argv) {
                     if (break_clicked) {
                         double remesh_ms = 0.0;
 
-                        if (apply_block_edit(&world, &renderer, &mesh,
-                                             render_meshes, &draw_calls,
+                        if (apply_block_edit(&world, &mesh, &chunk_batch,
+                                             &falling, &draw_calls,
                                              hit.x, hit.y, hit.z,
                                              TC_BLOCK_AIR, &remesh_ms)) {
                             edited = 1;
@@ -1938,8 +1987,8 @@ int tc_app_run(int argc, char **argv) {
                     if (mining_progress >= 1.0f) {
                         double remesh_ms = 0.0;
 
-                        if (apply_block_edit(&world, &renderer, &mesh,
-                                             render_meshes, &draw_calls,
+                        if (apply_block_edit(&world, &mesh, &chunk_batch,
+                                             &falling, &draw_calls,
                                              hit.x, hit.y, hit.z,
                                              TC_BLOCK_AIR, &remesh_ms)) {
                             uint16_t drop = tc_item_mining_drop(
@@ -1998,8 +2047,8 @@ int tc_app_run(int argc, char **argv) {
             size_t remesh_pending = 0;
             size_t remesh_limit = edited ? 1 : 6;
 
-            if (!rebuild_dirty_chunks(&world, &renderer, &mesh,
-                                      render_meshes, remesh_limit, 3.0, -1,
+            if (!rebuild_dirty_chunks(&world, &mesh, &chunk_batch,
+                                      remesh_limit, 3.0, -1,
                                       &remesh_stats, &remesh_count,
                                       &remesh_pending, &draw_calls)) {
                 tc_log_error("chunk remeshing failed");
@@ -2031,7 +2080,7 @@ int tc_app_run(int argc, char **argv) {
         for (size_t index = 0; index < slot_count; index++) {
             float distance;
 
-            if (render_meshes[index].index_count == 0
+            if (tc_chunk_batch_index_count(&chunk_batch, (int)index) == 0
                 || !chunk_in_frustum(&world, index, &frustum_planes[0][0])) {
                 continue;
             }
@@ -2067,9 +2116,32 @@ int tc_app_run(int argc, char **argv) {
             held_item = TC_ITEM_NONE;
         }
 
-        for (size_t index = 0; index < visible_chunks; index++) {
-            tc_renderer_draw_mesh(&renderer,
-                                  &render_meshes[draw_order[index]]);
+        if (visible_chunks > 0) {
+            float batch_origin[3];
+
+            tc_chunk_batch_origin(&chunk_batch, batch_origin);
+            tc_renderer_set_chunk_origin(&renderer, batch_origin[0],
+                                         batch_origin[1], batch_origin[2]);
+            tc_chunk_batch_draw(&chunk_batch, (const int *)draw_order,
+                                visible_chunks);
+        }
+
+        if (tc_falling_count(&falling) > 0) {
+            const tc_falling_block *blocks = tc_falling_data(&falling);
+            size_t count = tc_falling_count(&falling);
+
+            tc_renderer_begin_models(&renderer, camera_mvp);
+            for (size_t index = 0; index < count; index++) {
+                float position[3] = {
+                    (float)blocks[index].x,
+                    blocks[index].y,
+                    (float)blocks[index].z
+                };
+
+                tc_entity_draw_block(&entities, &renderer, blocks[index].block,
+                                     position);
+            }
+            tc_renderer_end_models(&renderer);
         }
 
         if (camera_mode != CAMERA_FIRST_PERSON
@@ -2305,10 +2377,8 @@ cleanup:
     if (mesh_initialized) {
         tc_mesh_shutdown(&mesh);
     }
-    if (render_meshes != NULL) {
-        for (size_t index = 0; index < slot_count; index++) {
-            tc_renderer_destroy_mesh(&render_meshes[index]);
-        }
+    if (chunk_batch_initialized) {
+        tc_chunk_batch_shutdown(&chunk_batch);
     }
     if (entities_initialized) {
         tc_entity_renderer_shutdown(&entities, &renderer);

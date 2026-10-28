@@ -430,7 +430,9 @@ void tc_renderer_begin_models(tc_renderer *renderer,
     glUniform1i(renderer->u_model_texture, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, renderer->texture);
-    glDisable(GL_CULL_FACE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
@@ -449,6 +451,22 @@ void tc_renderer_draw_model(tc_renderer *renderer,
                    GL_UNSIGNED_INT, (void *)0);
 }
 
+void tc_renderer_draw_model_double_sided(tc_renderer *renderer,
+                                         const tc_render_mesh *mesh,
+                                         const float model[16]) {
+    if (renderer == NULL || mesh == NULL || model == NULL || mesh->vao == 0
+        || mesh->index_count == 0) {
+        return;
+    }
+
+    glDisable(GL_CULL_FACE);
+    glBindVertexArray(mesh->vao);
+    glUniformMatrix4fv(renderer->u_model, 1, GL_FALSE, model);
+    glDrawElements(GL_TRIANGLES, (GLsizei)mesh->index_count,
+                   GL_UNSIGNED_INT, (void *)0);
+    glEnable(GL_CULL_FACE);
+}
+
 void tc_renderer_end_models(tc_renderer *renderer) {
     if (renderer == NULL) {
         return;
@@ -457,6 +475,16 @@ void tc_renderer_end_models(tc_renderer *renderer) {
     glDisable(GL_BLEND);
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
+}
+
+void tc_renderer_set_chunk_origin(tc_renderer *renderer, float x, float y,
+                                  float z) {
+    if (renderer == NULL) {
+        return;
+    }
+
+    tc_shader_bind(&renderer->shader);
+    glUniform3f(renderer->u_chunk_origin, x, y, z);
 }
 
 void tc_renderer_draw_mesh(tc_renderer *renderer, const tc_render_mesh *mesh) {
