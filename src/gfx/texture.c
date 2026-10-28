@@ -202,12 +202,49 @@ static void generate_bedrock(uint8_t *pixels) {
 
 static const char tool_pickaxe[TC_ATLAS_TILE_SIZE][TC_ATLAS_TILE_SIZE + 1] = {
     "................",
-    "................",
     ".....MMMMMM.....",
-    "....MMLLLLMM....",
-    "...MM..MM..MM...",
-    "...M........M...",
+    "....MLLLLLLM....",
+    "...MLLMMMMLLM...",
+    "...MLMMMMMMLM...",
+    "...MMMMMMMMMM...",
+    "........HH..MM..",
+    ".......HH....MM.",
+    "......HH......MM",
+    ".....HH.......MM",
+    "....HH........MM",
+    "...HH...........",
+    "..HH............",
+    ".HH.............",
+    "HH..............",
+    "................"
+};
+
+static const char tool_axe[TC_ATLAS_TILE_SIZE][TC_ATLAS_TILE_SIZE + 1] = {
     "................",
+    "..........MMLLL.",
+    ".........MMLLLLM",
+    "........MMMLLLLM",
+    ".......MMMMMMLLM",
+    "......MMMMM..MM.",
+    ".....MMMMM......",
+    "....MMMMM.......",
+    "...HHHH.........",
+    "..HHHH..........",
+    ".HHHH...........",
+    "HHHH............",
+    "HHH.............",
+    "HH..............",
+    "H...............",
+    "................"
+};
+
+static const char tool_shovel[TC_ATLAS_TILE_SIZE][TC_ATLAS_TILE_SIZE + 1] = {
+    "................",
+    "........MMMM....",
+    ".......MLLLLM...",
+    ".......MLLLLM...",
+    "........MMMM....",
+    ".........MM.....",
     "........HH......",
     ".......HH.......",
     "......HH........",
@@ -216,44 +253,7 @@ static const char tool_pickaxe[TC_ATLAS_TILE_SIZE][TC_ATLAS_TILE_SIZE + 1] = {
     "...HH...........",
     "..HH............",
     ".HH.............",
-    "................"
-};
-
-static const char tool_axe[TC_ATLAS_TILE_SIZE][TC_ATLAS_TILE_SIZE + 1] = {
-    "................",
-    "......MMMM......",
-    ".....MLLLLM.....",
-    "....MMM..MMM....",
-    "....MM....MM....",
-    "....MM....MM....",
-    ".....MM..MM.....",
-    "......MMMM......",
-    ".......HH.......",
-    "......HH........",
-    ".....HH.........",
-    "....HH..........",
-    "...HH...........",
-    "..HH............",
-    ".HH.............",
-    "................"
-};
-
-static const char tool_shovel[TC_ATLAS_TILE_SIZE][TC_ATLAS_TILE_SIZE + 1] = {
-    "................",
-    ".......MM.......",
-    "......MLLM......",
-    ".....MMMMMM.....",
-    ".....MMMMMM.....",
-    "......MMMM......",
-    ".......HH.......",
-    "......HH........",
-    ".....HH.........",
-    "....HH..........",
-    "...HH...........",
-    "..HH............",
-    ".HH.............",
-    "................",
-    "................",
+    "HH..............",
     "................"
 };
 
@@ -335,6 +335,22 @@ static void generate_player_tiles(uint8_t *pixels) {
     put_pixel(pixels, TC_TILE_FACE, 8, 6, 128, 78, 62);
     put_pixel(pixels, TC_TILE_FACE, 6, 7, 128, 78, 62);
     put_pixel(pixels, TC_TILE_FACE, 9, 7, 128, 78, 62);
+}
+
+const char *tc_texture_tool_pattern(uint8_t tile) {
+    switch (tile) {
+        case TC_TILE_WOODEN_PICKAXE:
+        case TC_TILE_STONE_PICKAXE:
+            return &tool_pickaxe[0][0];
+        case TC_TILE_WOODEN_AXE:
+        case TC_TILE_STONE_AXE:
+            return &tool_axe[0][0];
+        case TC_TILE_WOODEN_SHOVEL:
+        case TC_TILE_STONE_SHOVEL:
+            return &tool_shovel[0][0];
+        default:
+            return NULL;
+    }
 }
 
 void tc_texture_generate_atlas(uint8_t *pixels) {

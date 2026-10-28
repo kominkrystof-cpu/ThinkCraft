@@ -2,105 +2,13 @@
 #include "thinkcraft/log.h"
 #include "thinkcraft/math.h"
 #include "thinkcraft/mesh.h"
+#include "thinkcraft/model_geometry.h"
 
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
 
-#define TC_MODEL_UNIT (1.0f / 64.0f)
 #define TC_PI 3.14159265358979323846f
-
-static void set_vertex(tc_vertex *vertex, int x, int y, int z, int u, int v,
-                       int shade, int tile) {
-    vertex->position[0] = (uint16_t)x;
-    vertex->position[1] = (uint16_t)y;
-    vertex->position[2] = (uint16_t)z;
-    vertex->uv[0] = (uint8_t)u;
-    vertex->uv[1] = (uint8_t)v;
-    vertex->shade = (uint8_t)shade;
-    vertex->tile = (uint8_t)tile;
-}
-
-static int add_face(tc_mesh *mesh, int x0, int y0, int z0,
-                    int x1, int y1, int z1, int face, int shade,
-                    int tile) {
-    tc_vertex quad[4];
-
-    switch (face) {
-        case 0:
-            set_vertex(&quad[0], x0, y1, z1, 0, 0, shade, tile);
-            set_vertex(&quad[1], x1, y1, z1, 1, 0, shade, tile);
-            set_vertex(&quad[2], x1, y1, z0, 1, 1, shade, tile);
-            set_vertex(&quad[3], x0, y1, z0, 0, 1, shade, tile);
-            break;
-        case 1:
-            set_vertex(&quad[0], x0, y0, z0, 0, 1, shade, tile);
-            set_vertex(&quad[1], x1, y0, z0, 1, 1, shade, tile);
-            set_vertex(&quad[2], x1, y0, z1, 1, 0, shade, tile);
-            set_vertex(&quad[3], x0, y0, z1, 0, 0, shade, tile);
-            break;
-        case 2:
-            set_vertex(&quad[0], x1, y0, z1, 0, 0, shade, tile);
-            set_vertex(&quad[1], x1, y0, z0, 1, 0, shade, tile);
-            set_vertex(&quad[2], x1, y1, z0, 1, 1, shade, tile);
-            set_vertex(&quad[3], x1, y1, z1, 0, 1, shade, tile);
-            break;
-        case 3:
-            set_vertex(&quad[0], x0, y0, z0, 0, 0, shade, tile);
-            set_vertex(&quad[1], x0, y0, z1, 1, 0, shade, tile);
-            set_vertex(&quad[2], x0, y1, z1, 1, 1, shade, tile);
-            set_vertex(&quad[3], x0, y1, z0, 0, 1, shade, tile);
-            break;
-        case 4:
-            set_vertex(&quad[0], x0, y0, z1, 0, 0, shade, tile);
-            set_vertex(&quad[1], x1, y0, z1, 1, 0, shade, tile);
-            set_vertex(&quad[2], x1, y1, z1, 1, 1, shade, tile);
-            set_vertex(&quad[3], x0, y1, z1, 0, 1, shade, tile);
-            break;
-        case 5:
-        default:
-            set_vertex(&quad[0], x1, y0, z0, 0, 0, shade, tile);
-            set_vertex(&quad[1], x0, y0, z0, 1, 0, shade, tile);
-            set_vertex(&quad[2], x0, y1, z0, 1, 1, shade, tile);
-            set_vertex(&quad[3], x1, y1, z0, 0, 1, shade, tile);
-            break;
-    }
-
-    return tc_mesh_add_quad(mesh, quad);
-}
-
-static int add_box(tc_mesh *mesh, int x0, int y0, int z0,
-                   int width, int height, int depth, int top_tile,
-                   int bottom_tile, int east_tile, int west_tile,
-                   int south_tile, int north_tile) {
-    int x1 = x0 + width;
-    int y1 = y0 + height;
-    int z1 = z0 + depth;
-
-    return add_face(mesh, x0, y0, z0, x1, y1, z1, 0, 255, top_tile)
-        && add_face(mesh, x0, y0, z0, x1, y1, z1, 1, 140, bottom_tile)
-        && add_face(mesh, x0, y0, z0, x1, y1, z1, 2, 212, east_tile)
-        && add_face(mesh, x0, y0, z0, x1, y1, z1, 3, 190, west_tile)
-        && add_face(mesh, x0, y0, z0, x1, y1, z1, 4, 202, south_tile)
-        && add_face(mesh, x0, y0, z0, x1, y1, z1, 5, 174, north_tile);
-}
-
-static int add_uniform_box(tc_mesh *mesh, int x0, int y0, int z0,
-                           int width, int height, int depth, int tile) {
-    return add_box(mesh, x0, y0, z0, width, height, depth, tile, tile, tile,
-                   tile, tile, tile);
-}
-
-static int add_tool_plane(tc_mesh *mesh, int tile) {
-    tc_vertex quad[4];
-
-    set_vertex(&quad[0], 0, 0, 0, 0, 0, 255, tile);
-    set_vertex(&quad[1], 64, 0, 0, 1, 0, 255, tile);
-    set_vertex(&quad[2], 64, 64, 0, 1, 1, 255, tile);
-    set_vertex(&quad[3], 0, 64, 0, 0, 1, 255, tile);
-
-    return tc_mesh_add_quad(mesh, quad);
-}
 
 static int upload_mesh(tc_renderer *renderer, tc_render_mesh *target,
                        tc_mesh *mesh) {
@@ -113,37 +21,9 @@ static int upload_mesh(tc_renderer *renderer, tc_render_mesh *target,
 static int build_block_mesh(tc_renderer *renderer, tc_render_mesh *target,
                             uint8_t block) {
     tc_mesh mesh;
-    int top;
-    int side;
-    int bottom;
 
     tc_mesh_init(&mesh);
-
-    switch (block) {
-        case TC_BLOCK_GRASS:
-            top = TC_TILE_GRASS_TOP;
-            side = TC_TILE_GRASS_SIDE;
-            bottom = TC_TILE_DIRT;
-            break;
-        case TC_BLOCK_DIRT:
-            top = side = bottom = TC_TILE_DIRT;
-            break;
-        case TC_BLOCK_STONE:
-            top = side = bottom = TC_TILE_STONE;
-            break;
-        case TC_BLOCK_SAND:
-            top = side = bottom = TC_TILE_SAND;
-            break;
-        case TC_BLOCK_BEDROCK:
-            top = side = bottom = TC_TILE_BEDROCK;
-            break;
-        default:
-            tc_mesh_shutdown(&mesh);
-            return 1;
-    }
-
-    if (!add_box(&mesh, 0, 0, 0, 64, 64, 64, top, bottom, side, side, side,
-                 side)) {
+    if (!tc_model_build_block(&mesh, block)) {
         tc_mesh_shutdown(&mesh);
         return 0;
     }
@@ -156,7 +36,7 @@ static int build_tool_mesh(tc_renderer *renderer, tc_render_mesh *target,
     tc_mesh mesh;
 
     tc_mesh_init(&mesh);
-    if (!add_tool_plane(&mesh, tile)) {
+    if (!tc_model_build_tool(&mesh, (uint8_t)tile)) {
         tc_mesh_shutdown(&mesh);
         return 0;
     }
@@ -169,33 +49,34 @@ static int build_player_meshes(tc_entity_renderer *entities,
     tc_mesh mesh;
 
     tc_mesh_init(&mesh);
-    if (!add_box(&mesh, 0, 0, 0, 28, 28, 28, TC_TILE_HAIR, TC_TILE_SKIN,
+    if (!tc_model_add_box(&mesh, 0, 0, 0, 28, 28, 28, TC_TILE_HAIR, TC_TILE_SKIN,
                  TC_TILE_HAIR, TC_TILE_HAIR, TC_TILE_HAIR, TC_TILE_FACE)
         || !upload_mesh(renderer, &entities->head, &mesh)) {
         return 0;
     }
 
     tc_mesh_init(&mesh);
-    if (!add_uniform_box(&mesh, 0, 0, 0, 24, 44, 14, TC_TILE_SHIRT)
+    if (!tc_model_add_uniform_box(&mesh, 0, 0, 0, 24, 44, 14, TC_TILE_SHIRT)
         || !upload_mesh(renderer, &entities->torso, &mesh)) {
         return 0;
     }
 
     tc_mesh_init(&mesh);
-    if (!add_uniform_box(&mesh, 0, 0, 0, 12, 28, 12, TC_TILE_SHIRT)
-        || !add_uniform_box(&mesh, 0, 28, 0, 12, 16, 12, TC_TILE_SKIN)
+    if (!tc_model_add_uniform_box(&mesh, 0, 0, 0, 12, 28, 12, TC_TILE_SHIRT)
+        || !tc_model_add_uniform_box(&mesh, 0, 28, 0, 12, 16, 12,
+                                     TC_TILE_SKIN)
         || !upload_mesh(renderer, &entities->arm, &mesh)) {
         return 0;
     }
 
     tc_mesh_init(&mesh);
-    if (!add_uniform_box(&mesh, 0, 0, 0, 12, 44, 12, TC_TILE_PANTS)
+    if (!tc_model_add_uniform_box(&mesh, 0, 0, 0, 12, 44, 12, TC_TILE_PANTS)
         || !upload_mesh(renderer, &entities->leg, &mesh)) {
         return 0;
     }
 
     tc_mesh_init(&mesh);
-    if (!add_uniform_box(&mesh, 0, 0, 0, 10, 34, 10, TC_TILE_SKIN)
+    if (!tc_model_add_uniform_box(&mesh, 0, 0, 0, 10, 34, 10, TC_TILE_SKIN)
         || !upload_mesh(renderer, &entities->hand_arm, &mesh)) {
         return 0;
     }
@@ -314,7 +195,7 @@ static void item_matrix(float out[16], const float parent[16],
     if (block != TC_BLOCK_AIR) {
         tc_mat4_translate(center, -32.0f, -32.0f, -32.0f);
     } else {
-        tc_mat4_translate(center, -32.0f, -32.0f, 0.0f);
+        tc_mat4_translate(center, -32.0f, -32.0f, -2.0f);
     }
     tc_mat4_mul(local, translate, rotate_y);
     tc_mat4_mul(temporary, local, rotate_x);
@@ -347,11 +228,7 @@ static void draw_item(const tc_entity_renderer *entities,
     }
 
     item_matrix(model, parent, x, y, z, yaw, pitch, scale, item);
-    if (block != TC_BLOCK_AIR) {
-        tc_renderer_draw_model(renderer, mesh, model);
-    } else {
-        tc_renderer_draw_model_double_sided(renderer, mesh, model);
-    }
+    tc_renderer_draw_model(renderer, mesh, model);
 }
 
 void tc_entity_draw_first_person(const tc_entity_renderer *entities,

@@ -21,6 +21,7 @@ typedef struct {
     int32_t origin_z;
     uint32_t solid_count;
     uint8_t blocks[TC_CHUNK_BLOCK_COUNT];
+    int16_t max_y;
 } tc_chunk;
 
 static inline size_t tc_chunk_index(int x, int y, int z) {

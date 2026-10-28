@@ -49,6 +49,8 @@ void tc_world_generate_terrain(tc_world *world);
 tc_chunk *tc_world_chunk_at(const tc_world *world, int chunk_x, int chunk_z);
 uint8_t tc_world_get_block(const tc_world *world, int x, int y, int z);
 int tc_world_set_block(tc_world *world, int x, int y, int z, uint8_t block);
+void tc_world_mark_dirty(tc_world *world, int x, int y, int z);
+void tc_world_mark_dirty_neighbors(tc_world *world, int x, int y, int z);
 int tc_world_add_edit(tc_world *world, int x, int y, int z, uint8_t block);
 void tc_world_clear_edits(tc_world *world);
 size_t tc_world_edit_count(const tc_world *world);

@@ -13,7 +13,7 @@ out vec3 v_color;
 flat out int v_tile;
 
 void main() {
-    v_uv = a_uv;
+    v_uv = a_uv * (1.0 / 16.0);
     v_color = vec3(a_shade);
     v_tile = int(a_tile + 0.5);
     gl_Position = u_view_projection * u_model * vec4(a_position, 1.0);

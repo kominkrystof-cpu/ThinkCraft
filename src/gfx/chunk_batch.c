@@ -246,6 +246,8 @@ static int compact(tc_chunk_batch *batch) {
     size_t new_index_capacity[TC_CHUNK_BATCH_MAX_SLOTS];
     int order[TC_CHUNK_BATCH_MAX_SLOTS + 1];
     unsigned char keep[TC_CHUNK_BATCH_MAX_SLOTS] = {0};
+    tc_vertex *vertices = NULL;
+    uint32_t *indices = NULL;
     int count = 0;
 
     sort_slots_by_offset(batch, order);
@@ -272,6 +274,23 @@ static int compact(tc_chunk_batch *batch) {
         return 0;
     }
 
+    /* Copy into scratch storage before moving anything. New offsets can be
+     * larger than the old ones when a slot grew, so an in-place memmove in
+     * slot order can overwrite a later slot's source range. */
+    if (vertex_used > 0) {
+        vertices = calloc(vertex_used, sizeof(*vertices));
+        if (vertices == NULL) {
+            return 0;
+        }
+    }
+    if (index_used > 0) {
+        indices = calloc(index_used, sizeof(*indices));
+        if (indices == NULL) {
+            free(vertices);
+            return 0;
+        }
+    }
+
     for (int position = 0; position < count; position++) {
         int index = order[position];
         tc_chunk_batch_slot *slot = &batch->slots[index];
@@ -282,14 +301,14 @@ static int compact(tc_chunk_batch *batch) {
         uint32_t delta = (uint32_t)vertex_offset
                        - (uint32_t)old_vertex_offset;
 
-        if (vertex_offset != old_vertex_offset && slot->vertex_count > 0) {
-            memmove(&batch->shadow_vertices[vertex_offset],
-                    &batch->shadow_vertices[old_vertex_offset],
-                    (size_t)slot->vertex_count * sizeof(tc_vertex));
+        if (slot->vertex_count > 0) {
+            memcpy(&vertices[vertex_offset],
+                   &batch->shadow_vertices[old_vertex_offset],
+                   (size_t)slot->vertex_count * sizeof(tc_vertex));
         }
 
         for (unsigned int i = 0; i < slot->index_count; i++) {
-            batch->shadow_indices[index_offset + i] =
+            indices[index_offset + i] =
                 batch->shadow_indices[old_index_offset + i] + delta;
         }
 
@@ -299,6 +318,17 @@ static int compact(tc_chunk_batch *batch) {
         slot->index_capacity = new_index_capacity[index];
         slot->used = 1;
     }
+
+    if (vertex_used > 0) {
+        memcpy(batch->shadow_vertices, vertices,
+               vertex_used * sizeof(*vertices));
+    }
+    if (index_used > 0) {
+        memcpy(batch->shadow_indices, indices,
+               index_used * sizeof(*indices));
+    }
+    free(vertices);
+    free(indices);
 
     for (int index = 0; index < batch->slot_count; index++) {
         if (!keep[index]) {

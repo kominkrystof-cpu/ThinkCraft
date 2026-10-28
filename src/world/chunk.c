@@ -31,6 +31,7 @@ void tc_chunk_clear(tc_chunk *chunk) {
 
     memset(chunk->blocks, TC_BLOCK_AIR, sizeof(chunk->blocks));
     chunk->solid_count = 0;
+    chunk->max_y = -1;
 }
 
 int tc_chunk_set(tc_chunk *chunk, int x, int y, int z, uint8_t block) {
@@ -50,10 +51,40 @@ int tc_chunk_set(tc_chunk *chunk, int x, int y, int z, uint8_t block) {
     index = tc_chunk_index(x, y, z);
     previous = chunk->blocks[index];
 
+    if (previous == block) {
+        return 1;
+    }
+
     if (previous == TC_BLOCK_AIR && block != TC_BLOCK_AIR) {
         chunk->solid_count++;
+        if (y > chunk->max_y) {
+            chunk->max_y = (int16_t)y;
+        }
     } else if (previous != TC_BLOCK_AIR && block == TC_BLOCK_AIR) {
         chunk->solid_count--;
+        if (y == chunk->max_y) {
+            int scan_y = y - 1;
+
+            while (scan_y >= 0) {
+                const uint8_t *layer = chunk->blocks
+                    + (size_t)scan_y * TC_CHUNK_SIZE_X * TC_CHUNK_SIZE_Z;
+                int found = 0;
+
+                for (int i = 0; i < TC_CHUNK_SIZE_X * TC_CHUNK_SIZE_Z; i++) {
+                    if (layer[i] != TC_BLOCK_AIR) {
+                        found = 1;
+                        break;
+                    }
+                }
+
+                if (found) {
+                    break;
+                }
+                scan_y--;
+            }
+
+            chunk->max_y = (int16_t)scan_y;
+        }
     }
 
     chunk->blocks[index] = block;

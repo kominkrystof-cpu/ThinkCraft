@@ -3,10 +3,10 @@ default rel
 %define WORLD_SIZE_OFFSET 8
 %define WORLD_SLOTS_OFFSET 32
 %define CHUNK_BLOCKS_OFFSET 16
-%define SLOT_BYTES 65568
-%define SLOT_CHUNK_X 65552
-%define SLOT_CHUNK_Z 65556
-%define SLOT_LOADED 65560
+%define SLOT_BYTES 65572
+%define SLOT_CHUNK_X 65556
+%define SLOT_CHUNK_Z 65560
+%define SLOT_LOADED 65564
 
 section .text
 global tc_asm_aabb_collides

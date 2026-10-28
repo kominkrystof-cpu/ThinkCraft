@@ -31,4 +31,8 @@ typedef enum {
 
 void tc_texture_generate_atlas(uint8_t *pixels);
 
+/* Returns a 16x16 tool silhouette as 16 rows of 17 bytes (16 characters plus
+ * a NUL terminator), or NULL when the tile is not a tool. Row 0 is the top. */
+const char *tc_texture_tool_pattern(uint8_t tile);
+
 #endif

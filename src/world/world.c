@@ -376,6 +376,42 @@ int tc_world_set_block(tc_world *world, int x, int y, int z, uint8_t block) {
     return tc_world_add_edit(world, x, y, z, block);
 }
 
+void tc_world_mark_dirty(tc_world *world, int x, int y, int z) {
+    int chunk_x;
+    int chunk_z;
+
+    (void)y;
+
+    if (world == NULL) {
+        return;
+    }
+
+    chunk_x = tc_math_floor_div(x, TC_CHUNK_SIZE_X);
+    chunk_z = tc_math_floor_div(z, TC_CHUNK_SIZE_Z);
+    mark_chunk_dirty(world, chunk_x, chunk_z);
+}
+
+void tc_world_mark_dirty_neighbors(tc_world *world, int x, int y, int z) {
+    int chunk_x;
+    int chunk_z;
+    int local_x;
+    int local_z;
+
+    (void)y;
+
+    if (world == NULL) {
+        return;
+    }
+
+    chunk_x = tc_math_floor_div(x, TC_CHUNK_SIZE_X);
+    chunk_z = tc_math_floor_div(z, TC_CHUNK_SIZE_Z);
+    local_x = tc_math_floor_mod(x, TC_CHUNK_SIZE_X);
+    local_z = tc_math_floor_mod(z, TC_CHUNK_SIZE_Z);
+
+    mark_chunk_dirty(world, chunk_x, chunk_z);
+    mark_block_neighbors_dirty(world, chunk_x, chunk_z, local_x, local_z);
+}
+
 int tc_world_add_edit(tc_world *world, int x, int y, int z, uint8_t block) {
     int chunk_x;
     int chunk_z;

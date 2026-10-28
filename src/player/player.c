@@ -6,13 +6,13 @@
 
 _Static_assert(offsetof(tc_world, size) == 8, "world size offset changed");
 _Static_assert(offsetof(tc_world, slots) == 32, "world slots offset changed");
-_Static_assert(sizeof(tc_world_slot) == 65568, "world slot size changed");
+_Static_assert(sizeof(tc_world_slot) == 65572, "world slot size changed");
 _Static_assert(offsetof(tc_chunk, blocks) == 16, "chunk blocks offset changed");
-_Static_assert(offsetof(tc_world_slot, chunk_x) == 65552,
+_Static_assert(offsetof(tc_world_slot, chunk_x) == 65556,
                "world slot chunk x offset changed");
-_Static_assert(offsetof(tc_world_slot, chunk_z) == 65556,
+_Static_assert(offsetof(tc_world_slot, chunk_z) == 65560,
                "world slot chunk z offset changed");
-_Static_assert(offsetof(tc_world_slot, loaded) == 65560,
+_Static_assert(offsetof(tc_world_slot, loaded) == 65564,
                "world slot loaded offset changed");
 
 int tc_asm_aabb_collides(const tc_world *world, int min_x, int max_x,

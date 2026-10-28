@@ -850,7 +850,7 @@ static int apply_block_edit(tc_world *world, tc_mesh *mesh,
     priority_index = find_slot_index(world, chunk_x, chunk_z);
     start = tc_time_now();
 
-    if (!rebuild_dirty_chunks(world, mesh, batch, 1, 0.0, priority_index,
+    if (!rebuild_dirty_chunks(world, mesh, batch, 5, 0.0, priority_index,
                               &stats, &remeshed, &pending, draw_calls)) {
         return 0;
     }
@@ -1524,7 +1524,6 @@ int tc_app_run(int argc, char **argv) {
         int swing_continue = 0;
         int center_chunk_x;
         int center_chunk_z;
-        int edited = 0;
         size_t visible_chunks = 0;
         double now;
         double dt;
@@ -1826,14 +1825,7 @@ int tc_app_run(int argc, char **argv) {
                 walk_amount += (target_walk - walk_amount) * blend;
             }
 
-            {
-                int falling_landed = tc_falling_update(&falling, &world,
-                                                       (float)dt);
-
-                if (falling_landed > 0) {
-                    edited = 1;
-                }
-            }
+            tc_falling_update(&falling, &world, (float)dt);
 
             if (player.position[1] < -32.0f) {
                 float position[3] = {spawn_x, 40.0f, spawn_z};
@@ -1942,7 +1934,6 @@ int tc_app_run(int argc, char **argv) {
                                          &falling, &draw_calls,
                                          hit.previous_x, hit.previous_y,
                                          hit.previous_z, block, &remesh_ms)) {
-                        edited = 1;
                         if (game_mode == TC_GAME_MODE_SURVIVAL) {
                             tc_inventory_consume_selected(&inventory, 1);
                         }
@@ -1968,7 +1959,6 @@ int tc_app_run(int argc, char **argv) {
                                              &falling, &draw_calls,
                                              hit.x, hit.y, hit.z,
                                              TC_BLOCK_AIR, &remesh_ms)) {
-                            edited = 1;
                             tc_log_info("broke block at (%d, %d, %d), "
                                         "remesh %.2f ms",
                                         hit.x, hit.y, hit.z, remesh_ms);
@@ -1994,7 +1984,6 @@ int tc_app_run(int argc, char **argv) {
                             uint16_t drop = tc_item_mining_drop(
                                 hit.block, selected_item);
 
-                            edited = 1;
                             if (drop != TC_ITEM_NONE) {
                                 uint16_t leftover = tc_inventory_add(
                                     &inventory, drop, 1);
@@ -2045,7 +2034,7 @@ int tc_app_run(int argc, char **argv) {
             tc_mesh_stats remesh_stats;
             size_t remesh_count = 0;
             size_t remesh_pending = 0;
-            size_t remesh_limit = edited ? 1 : 6;
+            size_t remesh_limit = 6;
 
             if (!rebuild_dirty_chunks(&world, &mesh, &chunk_batch,
                                       remesh_limit, 3.0, -1,

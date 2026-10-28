@@ -108,25 +108,10 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
     stats.scan_ms = (tc_time_now() - scan_start) * 1000.0;
     build_start = tc_time_now();
 
-    for (int y = TC_CHUNK_SIZE_Y - 1; y >= 0; y--) {
-        const uint8_t *layer = chunk->blocks
-            + (size_t)y * TC_CHUNK_SIZE_X * TC_CHUNK_SIZE_Z;
-        int found = 0;
-
-        for (int i = 0; i < TC_CHUNK_SIZE_X * TC_CHUNK_SIZE_Z; i++) {
-            if (layer[i] != TC_BLOCK_AIR) {
-                found = 1;
-                break;
-            }
-        }
-
-        if (found) {
-            max_y = y;
-            break;
-        }
-    }
+    max_y = chunk->max_y;
 
     if (max_y < 0) {
+        /* tc_mesh_clear above already reset vertex/index/quad counts. */
         stats.build_ms = (tc_time_now() - build_start) * 1000.0;
         if (stats_out != NULL) {
             *stats_out = stats;
@@ -139,7 +124,8 @@ int tc_chunk_build_mesh_sampled(const tc_chunk *chunk,
     /* Fill the cache: interior bytes come straight from chunk->blocks, which is
      * exactly what sample_chunk_block returns for in-range coordinates, and the
      * one-block shell is sampled a few thousand times instead of once per
-     * voxel per slice. Cells outside y in [-1, max_y + 1] are never read. */
+     * voxel per slice. Cells outside y in [-1, max_y + 1] are never read, so
+     * max_y + 3 layers cover every cache access in the greedy loop below. */
     memset(cache, 0, (size_t)TC_CACHE_LAYER * (size_t)(max_y + 3));
     for (int y = 0; y <= max_y; y++) {
         const uint8_t *source = chunk->blocks
