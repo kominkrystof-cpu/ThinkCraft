@@ -17,6 +17,7 @@
 #include "thinkcraft/settings.h"
 #include "thinkcraft/terrain.h"
 #include "thinkcraft/text.h"
+#include "thinkcraft/visibility.h"
 #include "thinkcraft/window.h"
 #include "thinkcraft/world.h"
 
@@ -91,6 +92,7 @@ typedef struct {
     const char *facing;
     size_t loaded_chunks;
     size_t visible_chunks;
+    size_t occluded_chunks;
     size_t slot_count;
     int render_distance;
     float render_scale;
@@ -627,8 +629,9 @@ static int rebuild_slot_mesh(tc_world *world, tc_mesh *mesh,
 static int rebuild_dirty_chunks(tc_world *world, tc_mesh *mesh,
                                 tc_chunk_batch *batch, size_t max_chunks,
                                 double time_budget_ms, int priority_index,
-                                tc_mesh_stats *stats, size_t *remeshed_out,
-                                size_t *pending_out, size_t *draw_calls_out) {
+                                const float eye[3], tc_mesh_stats *stats,
+                                size_t *remeshed_out, size_t *pending_out,
+                                size_t *draw_calls_out) {
     tc_mesh_stats totals = {0};
     size_t slot_count;
     size_t remeshed = 0;
@@ -636,6 +639,9 @@ static int rebuild_dirty_chunks(tc_world *world, tc_mesh *mesh,
     size_t draw_calls = 0;
     double start;
     int limit_reached = 0;
+    int dirty_order[TC_CHUNK_BATCH_MAX_SLOTS];
+    float dirty_distance[TC_CHUNK_BATCH_MAX_SLOTS];
+    int dirty_count = 0;
 
     if (world == NULL || mesh == NULL || batch == NULL || stats == NULL) {
         return 0;
@@ -658,22 +664,50 @@ static int rebuild_dirty_chunks(tc_world *world, tc_mesh *mesh,
         }
     }
 
-    for (size_t index = 0; index < slot_count; index++) {
+    for (int index = 0; index < (int)slot_count; index++) {
         tc_world_slot *slot;
+        float distance;
+        int position;
 
-        if ((int)index == priority_index) {
+        if (index == priority_index) {
             continue;
         }
 
         slot = &world->slots[index];
         if (!slot->loaded) {
-            tc_chunk_batch_clear(batch, (int)index);
+            tc_chunk_batch_clear(batch, index);
             continue;
         }
 
         if (!slot->dirty) {
             continue;
         }
+
+        if (eye != NULL) {
+            float dx = (float)slot->chunk.origin_x
+                     + (float)TC_CHUNK_SIZE_X * 0.5f - eye[0];
+            float dz = (float)slot->chunk.origin_z
+                     + (float)TC_CHUNK_SIZE_Z * 0.5f - eye[2];
+
+            distance = dx * dx + dz * dz;
+        } else {
+            distance = (float)index;
+        }
+
+        position = dirty_count;
+        while (position > 0 && distance < dirty_distance[position - 1]) {
+            dirty_order[position] = dirty_order[position - 1];
+            dirty_distance[position] = dirty_distance[position - 1];
+            position--;
+        }
+        dirty_order[position] = index;
+        dirty_distance[position] = distance;
+        dirty_count++;
+    }
+
+    for (int order = 0; order < dirty_count; order++) {
+        int index = dirty_order[order];
+        tc_world_slot *slot = &world->slots[index];
 
         if (!limit_reached && max_chunks != 0 && remeshed >= max_chunks) {
             limit_reached = 1;
@@ -687,8 +721,8 @@ static int rebuild_dirty_chunks(tc_world *world, tc_mesh *mesh,
             continue;
         }
 
-        if (!rebuild_slot_mesh(world, mesh, batch, index, slot, &totals,
-                               &remeshed)) {
+        if (!rebuild_slot_mesh(world, mesh, batch, (size_t)index, slot,
+                               &totals, &remeshed)) {
             return 0;
         }
     }
@@ -851,7 +885,8 @@ static int apply_block_edit(tc_world *world, tc_mesh *mesh,
     start = tc_time_now();
 
     if (!rebuild_dirty_chunks(world, mesh, batch, 5, 0.0, priority_index,
-                              &stats, &remeshed, &pending, draw_calls)) {
+                              NULL, &stats, &remeshed, &pending,
+                              draw_calls)) {
         return 0;
     }
 
@@ -901,8 +936,8 @@ static int rebuild_all_world_meshes(tc_world *world, tc_mesh *mesh,
         }
     }
 
-    return rebuild_dirty_chunks(world, mesh, batch, SIZE_MAX, 0.0, -1, &stats,
-                                &remeshed, &pending, draw_calls);
+    return rebuild_dirty_chunks(world, mesh, batch, SIZE_MAX, 0.0, -1, NULL,
+                                &stats, &remeshed, &pending, draw_calls);
 }
 
 static int start_new_world(tc_world *world, tc_player *player, uint32_t seed,
@@ -1125,8 +1160,10 @@ static void draw_debug_overlay(tc_text_renderer *text, int framebuffer_width,
     snprintf(lines[count++], sizeof(lines[0]), "CHUNK %d %d  SEED %08X",
              info->chunk_x, info->chunk_z, (unsigned int)info->seed);
     snprintf(lines[count++], sizeof(lines[0]), "FACING %s", info->facing);
-    snprintf(lines[count++], sizeof(lines[0]), "CHUNKS %zu/%zu  VISIBLE %zu",
-             info->loaded_chunks, info->slot_count, info->visible_chunks);
+    snprintf(lines[count++], sizeof(lines[0]),
+             "CHUNKS %zu/%zu  VISIBLE %zu  CULLED %zu",
+             info->loaded_chunks, info->slot_count, info->visible_chunks,
+             info->occluded_chunks);
     snprintf(lines[count++], sizeof(lines[0]), "RENDER %d  SCALE %.2f",
              info->render_distance, info->render_scale);
     snprintf(lines[count++], sizeof(lines[0]), "HP %.0f  FOOD %.0f",
@@ -1260,6 +1297,7 @@ int tc_app_run(int argc, char **argv) {
     tc_entity_renderer entities;
     tc_text_renderer text;
     tc_chunk_batch chunk_batch;
+    tc_visibility_scheduler visibility;
     tc_falling_blocks falling;
     size_t *draw_order = NULL;
     float *draw_distances = NULL;
@@ -1441,6 +1479,7 @@ int tc_app_run(int argc, char **argv) {
         goto cleanup;
     }
     chunk_batch_initialized = 1;
+    tc_visibility_scheduler_init(&visibility, 4);
     tc_falling_init(&falling);
 
     if (slot_count > SIZE_MAX / sizeof(*draw_order)) {
@@ -1470,7 +1509,7 @@ int tc_app_run(int argc, char **argv) {
     mesh_initialized = 1;
 
     if (!rebuild_dirty_chunks(&world, &mesh, &chunk_batch,
-                              SIZE_MAX, 0.0, -1, &initial_stats,
+                              SIZE_MAX, 0.0, -1, NULL, &initial_stats,
                               &initial_remeshed, &initial_pending,
                               &draw_calls)) {
         tc_log_error("failed to build the initial world meshes");
@@ -1525,6 +1564,7 @@ int tc_app_run(int argc, char **argv) {
         int center_chunk_x;
         int center_chunk_z;
         size_t visible_chunks = 0;
+        size_t occluded_chunks = 0;
         double now;
         double dt;
         double frame_start;
@@ -2034,10 +2074,10 @@ int tc_app_run(int argc, char **argv) {
             tc_mesh_stats remesh_stats;
             size_t remesh_count = 0;
             size_t remesh_pending = 0;
-            size_t remesh_limit = 6;
+            size_t remesh_limit = 12;
 
             if (!rebuild_dirty_chunks(&world, &mesh, &chunk_batch,
-                                      remesh_limit, 3.0, -1,
+                                      remesh_limit, 4.0, -1, eye,
                                       &remesh_stats, &remesh_count,
                                       &remesh_pending, &draw_calls)) {
                 tc_log_error("chunk remeshing failed");
@@ -2066,11 +2106,22 @@ int tc_app_run(int argc, char **argv) {
             extract_frustum_planes(mvp, frustum_planes);
         }
 
+        tc_visibility_scheduler_begin_frame(&visibility, eye, forward,
+                                            (int)slot_count,
+                                            world.center_chunk_x,
+                                            world.center_chunk_z);
+
         for (size_t index = 0; index < slot_count; index++) {
             float distance;
 
             if (tc_chunk_batch_index_count(&chunk_batch, (int)index) == 0
                 || !chunk_in_frustum(&world, index, &frustum_planes[0][0])) {
+                continue;
+            }
+
+            if (!tc_visibility_scheduler_visible(&visibility, &world, index,
+                                                 eye)) {
+                occluded_chunks++;
                 continue;
             }
 
@@ -2082,6 +2133,8 @@ int tc_app_run(int argc, char **argv) {
             draw_distances[index] = distance;
             draw_order[visible_chunks++] = index;
         }
+
+        tc_visibility_scheduler_end_frame(&visibility);
 
         for (size_t index = 1; index < visible_chunks; index++) {
             size_t item = draw_order[index];
@@ -2254,6 +2307,7 @@ int tc_app_run(int argc, char **argv) {
             info.facing = facing_name(forward);
             info.loaded_chunks = tc_world_loaded_count(&world);
             info.visible_chunks = visible_chunks;
+            info.occluded_chunks = occluded_chunks;
             info.slot_count = tc_world_capacity(&world);
             info.render_distance = world.radius;
             info.render_scale = render_scale;
@@ -2283,7 +2337,8 @@ int tc_app_run(int argc, char **argv) {
                      world.center_chunk_x, world.center_chunk_z, mode, fps,
                      framebuffer_width, framebuffer_height);
             tc_window_set_title(&window, title);
-            tc_log_info("%.1f FPS, %zu visible chunks", fps, visible_chunks);
+            tc_log_info("%.1f FPS, %zu visible chunks, %zu occluded",
+                        fps, visible_chunks, occluded_chunks);
             display_fps = fps;
             rss_bytes = tc_platform_rss_bytes();
             frames_since_report = 0;

@@ -237,7 +237,54 @@ static void sort_slots_by_offset(const tc_chunk_batch *batch, int *order) {
     order[count] = -1;
 }
 
-static int compact(tc_chunk_batch *batch) {
+static void slot_required_capacity(const tc_chunk_batch_slot *slot,
+                                   size_t *vertex_capacity,
+                                   size_t *index_capacity) {
+    *vertex_capacity = (size_t)slot->vertex_count
+                     + ((size_t)slot->vertex_count >> 2) + 64;
+    *index_capacity = (size_t)slot->index_count
+                    + ((size_t)slot->index_count >> 2) + 96;
+}
+
+void tc_chunk_batch_compact_required(const tc_chunk_batch *batch,
+                                     size_t *vertex_used,
+                                     size_t *index_used) {
+    size_t vertices = 0;
+    size_t indices = 0;
+
+    if (batch == NULL) {
+        if (vertex_used != NULL) {
+            *vertex_used = 0;
+        }
+        if (index_used != NULL) {
+            *index_used = 0;
+        }
+        return;
+    }
+
+    for (int index = 0; index < batch->slot_count; index++) {
+        const tc_chunk_batch_slot *slot = &batch->slots[index];
+        size_t vertex_capacity;
+        size_t index_capacity;
+
+        if (!slot->used || slot->index_count == 0) {
+            continue;
+        }
+
+        slot_required_capacity(slot, &vertex_capacity, &index_capacity);
+        vertices += vertex_capacity;
+        indices += index_capacity;
+    }
+
+    if (vertex_used != NULL) {
+        *vertex_used = vertices;
+    }
+    if (index_used != NULL) {
+        *index_used = indices;
+    }
+}
+
+int tc_chunk_batch_compact_cpu(tc_chunk_batch *batch) {
     size_t vertex_used = 0;
     size_t index_used = 0;
     size_t new_vertex_offset[TC_CHUNK_BATCH_MAX_SLOTS];
@@ -250,16 +297,27 @@ static int compact(tc_chunk_batch *batch) {
     uint32_t *indices = NULL;
     int count = 0;
 
+    if (batch == NULL) {
+        return 0;
+    }
+
+    tc_chunk_batch_compact_required(batch, &vertex_used, &index_used);
+    if (vertex_used > batch->vertex_capacity
+        || index_used > batch->index_capacity) {
+        return 0;
+    }
+
+    vertex_used = 0;
+    index_used = 0;
     sort_slots_by_offset(batch, order);
 
     for (int position = 0; order[position] >= 0; position++) {
         int index = order[position];
         const tc_chunk_batch_slot *slot = &batch->slots[index];
-        size_t vertex_capacity = (size_t)slot->vertex_count
-                               + ((size_t)slot->vertex_count >> 2) + 64;
-        size_t index_capacity = (size_t)slot->index_count
-                              + ((size_t)slot->index_count >> 2) + 96;
+        size_t vertex_capacity;
+        size_t index_capacity;
 
+        slot_required_capacity(slot, &vertex_capacity, &index_capacity);
         new_vertex_offset[index] = vertex_used;
         new_index_offset[index] = index_used;
         new_vertex_capacity[index] = vertex_capacity;
@@ -268,10 +326,6 @@ static int compact(tc_chunk_batch *batch) {
         index_used += index_capacity;
         keep[index] = 1;
         count++;
-    }
-
-    if (!ensure_capacity(batch, vertex_used, index_used)) {
-        return 0;
     }
 
     /* Copy into scratch storage before moving anything. New offsets can be
@@ -342,6 +396,20 @@ static int compact(tc_chunk_batch *batch) {
     batch->index_used = index_used;
     batch->waste_vertices = 0;
     batch->waste_indices = 0;
+    return 1;
+}
+
+static int compact(tc_chunk_batch *batch) {
+    size_t vertex_used = 0;
+    size_t index_used = 0;
+
+    tc_chunk_batch_compact_required(batch, &vertex_used, &index_used);
+    if (!ensure_capacity(batch, vertex_used, index_used)) {
+        return 0;
+    }
+    if (!tc_chunk_batch_compact_cpu(batch)) {
+        return 0;
+    }
     upload_full(batch);
     return 1;
 }

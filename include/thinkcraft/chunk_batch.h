@@ -9,7 +9,7 @@
 /* Chunk vertices stay packed as chunk-local uint16 positions. The batch adds a
  * fixed bias once at upload time, so every visible chunk can be drawn from one
  * shared vertex buffer with a single glMultiDrawElements call. */
-#define TC_CHUNK_BATCH_MAX_SLOTS 256
+#define TC_CHUNK_BATCH_MAX_SLOTS 512
 #define TC_CHUNK_BATCH_BIAS 32768
 
 typedef struct {
@@ -47,6 +47,14 @@ void tc_batch_bake_vertices(tc_vertex *dst, const tc_vertex *src, size_t count,
 
 int tc_chunk_batch_init(tc_chunk_batch *batch, int slot_count);
 void tc_chunk_batch_shutdown(tc_chunk_batch *batch);
+
+/* CPU-only compaction helpers, exposed so the slot move/rebasing logic can be
+ * regression-tested without a GL context. The real path calls these after
+ * growing the shadow buffers. */
+void tc_chunk_batch_compact_required(const tc_chunk_batch *batch,
+                                     size_t *vertex_used,
+                                     size_t *index_used);
+int tc_chunk_batch_compact_cpu(tc_chunk_batch *batch);
 int tc_chunk_batch_upload(tc_chunk_batch *batch, int slot, const tc_mesh *mesh);
 void tc_chunk_batch_clear(tc_chunk_batch *batch, int slot);
 unsigned int tc_chunk_batch_index_count(const tc_chunk_batch *batch,

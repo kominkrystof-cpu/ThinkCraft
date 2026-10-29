@@ -7,7 +7,7 @@
 
 #define TC_WORLD_DEFAULT_RADIUS 4
 #define TC_WORLD_DEFAULT_SIZE (TC_WORLD_DEFAULT_RADIUS * 2 + 1)
-#define TC_WORLD_MAX_RADIUS 6
+#define TC_WORLD_MAX_RADIUS 8
 
 typedef struct {
     tc_chunk chunk;
